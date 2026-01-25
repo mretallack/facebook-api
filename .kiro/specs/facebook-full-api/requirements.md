@@ -5,6 +5,37 @@ A comprehensive REST API that provides programmatic access to all major Facebook
 
 ## User Stories & Requirements
 
+### Session Persistence & Cookie Management
+
+**Story**: As a system, I want to persist sessions across restarts so I can minimize login frequency.
+
+WHEN the system starts up
+THE SYSTEM SHALL load existing cookies from storage if available
+
+WHEN the system loads cookies
+THE SYSTEM SHALL validate the session is still active
+
+WHEN the session validation fails
+THE SYSTEM SHALL perform a fresh login
+
+WHEN the system performs a login
+THE SYSTEM SHALL enable the "Remember Me" checkbox to extend session lifetime
+
+WHEN the system successfully logs in
+THE SYSTEM SHALL save cookies to persistent storage
+
+WHEN the system performs actions
+THE SYSTEM SHALL periodically save cookies (every 100 actions)
+
+WHEN the system shuts down
+THE SYSTEM SHALL save current cookies before closing
+
+WHEN cookies are older than 25 days
+THE SYSTEM SHALL proactively refresh the session
+
+WHEN multiple accounts are configured
+THE SYSTEM SHALL maintain separate cookie files per account
+
 ### Profile Management
 
 **Story**: As a user, I want to manage my profile so I can update my information programmatically.
@@ -318,3 +349,9 @@ THE SYSTEM SHALL add the video to saved items
 - All operations must be idempotent where possible
 - API must provide detailed error messages
 - System must support retry logic for transient failures
+- Cookie files must be encrypted at rest
+- Session validation must complete within 5 seconds
+- Cookie persistence must reduce login frequency by 95%+
+- README.md must be updated with every issue and solution discovered
+- All technical problems must be documented with timestamps and resolutions
+- Documentation must include code references for all fixes
