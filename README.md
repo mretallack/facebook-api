@@ -83,4 +83,25 @@ Visit `http://localhost:8000/docs` for interactive API documentation.
 - First run will require Facebook login
 - Session cookies are saved for reuse
 - 2FA may require manual intervention
-- Headless mode can be disabled for debugging
+- Headless mode can be disabled for debugging (set `HEADLESS=false`)
+- If login fails, check:
+  - Credentials are correct
+  - Account doesn't require verification
+  - Account doesn't have 2FA enabled
+  - Facebook isn't blocking automation (try with `HEADLESS=false`)
+
+## Troubleshooting
+
+### Login Fails
+If automated login fails, you can manually login once:
+1. Set `HEADLESS=false` in `.env`
+2. Run the API
+3. Complete login manually in the browser window
+4. Cookies will be saved for future use
+
+### Testing
+Run login tests:
+```bash
+python3.12 test_login.py        # Basic browser tests
+python3.12 test_real_login.py   # Actual login attempt
+```
