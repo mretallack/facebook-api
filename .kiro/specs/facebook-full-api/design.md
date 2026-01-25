@@ -478,6 +478,351 @@ Client          API      FriendsService   Navigator    Extractor    Browser
   │<─200 OK─────│             │              │            │           │
 ```
 
+## Common Problems from Other Projects & Solutions
+
+Based on research of existing Facebook automation projects and anti-bot systems, the following issues are commonly encountered:
+
+### 1. Detection & Blocking Issues
+
+**Problem**: Facebook's multi-layered anti-bot detection system
+- TLS fingerprinting detection
+- JavaScript execution pattern analysis
+- Browser fingerprint inconsistencies
+- Timing regularity detection
+- Request header analysis
+- Navigator.webdriver flag exposure
+
+**Solutions Implemented**:
+```python
+# Use undetected-playwright or patchright
+# Patches Runtime.enable to avoid detection
+# Removes navigator.webdriver flag
+
+# Browser launch with anti-detection
+browser = await playwright.chromium.launch(
+    headless=False,  # Headless mode more easily detected
+    args=[
+        '--disable-blink-features=AutomationControlled',
+        '--disable-dev-shm-usage',
+        '--no-sandbox',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process'
+    ]
+)
+
+# Consistent browser fingerprinting
+context = await browser.new_context(
+    viewport={'width': 1920, 'height': 1080},
+    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    locale='en-US',
+    timezone_id='America/New_York',
+    permissions=['geolocation'],
+    geolocation={'latitude': 40.7128, 'longitude': -74.0060},
+    color_scheme='light'
+)
+
+# Hide automation flags
+await page.add_init_script("""
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+    window.chrome = {runtime: {}};
+""")
+```
+
+**References**:
+- [undetected-playwright-python](https://github.com/kaliiiiiiiiii/undetected-playwright-python)
+- [playwright-with-fingerprints](https://github.com/CheshireCaat/playwright-with-fingerprints)
+
+### 2. Account Suspension & Rate Limiting
+
+**Problem**: Aggressive automation triggers account bans
+- Rapid posting (>10 posts/hour)
+- Mass messaging (>50 messages/hour)
+- Excessive friend requests (>20/hour)
+- Posting too close together
+- Using third-party bots without approval
+
+**Solutions**:
+```python
+class RateLimiter:
+    """Enforce Facebook rate limits per action type"""
+    
+    limits = {
+        'friend_request': {'max': 15, 'window': 3600},  # 15/hour (conservative)
+        'post': {'max': 8, 'window': 3600},             # 8/hour
+        'message': {'max': 40, 'window': 3600},         # 40/hour
+        'like': {'max': 80, 'window': 3600},            # 80/hour
+        'comment': {'max': 30, 'window': 3600},         # 30/hour
+        'group_join': {'max': 5, 'window': 3600},       # 5/hour
+    }
+    
+    async def check_limit(self, action_type: str, account_id: str):
+        """Check if action is within rate limit"""
+        # Track actions in time window
+        # Block if limit exceeded
+        # Add exponential backoff on repeated limits
+```
+
+**Account Warming Strategy**:
+```python
+# New accounts need gradual activity increase
+warming_schedule = {
+    'day_1': {'posts': 2, 'likes': 10, 'friend_requests': 3},
+    'day_2': {'posts': 3, 'likes': 15, 'friend_requests': 5},
+    'day_3': {'posts': 5, 'likes': 25, 'friend_requests': 8},
+    # ... gradually increase over 2 weeks
+}
+```
+
+**References**:
+- 40% of marketers report ad account restrictions (Social Media Examiner 2022)
+- Facebook disables accounts for automation tool use without warning
+
+### 3. Dynamic Content & Selector Changes
+
+**Problem**: Facebook frequently changes CSS selectors and page structure
+- Selectors break without notice
+- Dynamic CSS class names
+- A/B testing different UIs
+- Regional UI variations
+
+**Solutions Already Implemented**:
+- Selector database with version history
+- Multiple fallback selectors
+- Automatic selector validation
+- UI change detection with screenshots
+- Auto-discovery of new selectors
+
+### 4. Login & Session Management
+
+**Problem**: Frequent re-authentication required
+- Sessions expire quickly
+- 2FA challenges
+- Security checkpoints
+- "Suspicious activity" blocks
+
+**Solutions Already Implemented**:
+- Cookie persistence with "Remember Me"
+- Session validation before actions
+- Proactive cookie refresh (25-day cycle)
+- Per-account cookie storage
+
+**Additional Recommendations**:
+```python
+# Handle security checkpoints
+async def handle_checkpoint(page: Page):
+    """Detect and handle Facebook security checkpoints"""
+    checkpoint_selectors = [
+        'text="Security Check"',
+        'text="Confirm Your Identity"',
+        'text="Please Review Your Recent Activity"'
+    ]
+    
+    for selector in checkpoint_selectors:
+        if await page.query_selector(selector):
+            logger.warning("security_checkpoint_detected")
+            # Pause automation
+            # Send alert for manual intervention
+            # Save checkpoint screenshot
+            await page.screenshot(path=f"logs/checkpoint_{timestamp}.png")
+            raise SecurityCheckpointError("Manual intervention required")
+```
+
+### 5. CAPTCHA Challenges
+
+**Problem**: Facebook shows CAPTCHAs to suspected bots
+- Image recognition CAPTCHAs
+- reCAPTCHA v2/v3
+- hCaptcha
+
+**Solutions**:
+```python
+# Detection
+async def detect_captcha(page: Page) -> bool:
+    """Check if CAPTCHA is present"""
+    captcha_indicators = [
+        'iframe[src*="recaptcha"]',
+        'iframe[src*="hcaptcha"]',
+        '[data-testid="captcha"]',
+        'text="Please complete the security check"'
+    ]
+    
+    for selector in captcha_indicators:
+        if await page.query_selector(selector):
+            return True
+    return False
+
+# Handling options:
+# 1. Manual solving (pause and alert)
+# 2. CAPTCHA solving service (2captcha, anticaptcha)
+# 3. Reduce activity to avoid CAPTCHAs
+```
+
+### 6. Proxy & IP Management
+
+**Problem**: Single IP makes detection easier
+- IP reputation scoring
+- Geographic inconsistencies
+- Concurrent session limits per IP
+
+**Solutions**:
+```python
+# Residential proxy rotation
+class ProxyManager:
+    """Manage proxy rotation per account"""
+    
+    async def get_proxy(self, account_id: str) -> str:
+        """Get sticky residential proxy for account"""
+        # Use same proxy for same account (consistency)
+        # Rotate only on session refresh
+        # Match proxy location to account location
+        
+    async def validate_proxy(self, proxy: str) -> bool:
+        """Check proxy is working and not blacklisted"""
+```
+
+**Recommendations**:
+- Use residential proxies (not datacenter)
+- Sticky sessions (same IP per account)
+- Match proxy location to account profile
+- Rotate proxies only on new sessions
+
+### 7. Memory Leaks & Resource Management
+
+**Problem**: Long-running scrapers consume excessive memory
+- Browser contexts not closed
+- Page objects accumulate
+- Event listeners not removed
+
+**Solutions**:
+```python
+# Proper cleanup
+async def cleanup_session(account_id: str):
+    """Clean up browser resources"""
+    if account_id in pages:
+        await pages[account_id].close()
+        del pages[account_id]
+    
+    if account_id in contexts:
+        await contexts[account_id].close()
+        del contexts[account_id]
+    
+    # Force garbage collection
+    import gc
+    gc.collect()
+
+# Resource limits
+MAX_PAGES_PER_CONTEXT = 5
+MAX_CONTEXTS_PER_BROWSER = 10
+```
+
+### 8. Error Handling & Recovery
+
+**Problem**: Cascading failures when errors occur
+- Network timeouts
+- Element not found
+- Navigation failures
+- Session expiration
+
+**Solutions**:
+```python
+class RetryStrategy:
+    """Intelligent retry with exponential backoff"""
+    
+    async def execute_with_retry(self, func, max_retries=3):
+        """Execute function with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                return await func()
+            except TimeoutError:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt  # Exponential backoff
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+            except ElementNotFoundError:
+                # Selector might have changed
+                await self.refresh_selectors()
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    raise
+```
+
+### 9. Content Extraction Challenges
+
+**Problem**: Extracting clean data from dynamic content
+- Lazy-loaded content
+- Infinite scroll
+- Duplicate posts
+- Incomplete data
+
+**Solutions**:
+```python
+async def extract_with_scroll(page: Page, limit: int):
+    """Extract content with intelligent scrolling"""
+    seen_ids = set()
+    posts = []
+    no_new_content_count = 0
+    
+    while len(posts) < limit and no_new_content_count < 3:
+        # Scroll
+        await page.evaluate('window.scrollBy(0, window.innerHeight)')
+        await asyncio.sleep(random.uniform(2, 4))
+        
+        # Extract visible posts
+        new_posts = await extract_visible_posts(page)
+        
+        # Deduplicate
+        new_unique = [p for p in new_posts if p['id'] not in seen_ids]
+        
+        if not new_unique:
+            no_new_content_count += 1
+        else:
+            no_new_content_count = 0
+            posts.extend(new_unique)
+            seen_ids.update(p['id'] for p in new_unique)
+```
+
+### 10. Monitoring & Adaptation
+
+**Problem**: Fighting yesterday's war - not adapting to changes
+- No visibility into failures
+- Manual detection of issues
+- Reactive rather than proactive
+
+**Solutions Already Implemented**:
+- Comprehensive logging with screenshots
+- Selector validation health checks
+- UI change detection
+- Automatic alerts
+- Metrics tracking
+
+## Technology Recommendations
+
+Based on research, use these libraries:
+
+1. **undetected-playwright** or **patchright** (fork)
+   - Patches Runtime.enable
+   - Removes automation flags
+   - Better than standard Playwright for Facebook
+
+2. **playwright-stealth** (if not using undetected)
+   - 17 evasion modules
+   - Browser fingerprint modification
+   - Automation signature masking
+
+3. **Residential Proxy Services**
+   - Bright Data, Smartproxy, Oxylabs
+   - Avoid datacenter proxies
+   - Use sticky sessions
+
+4. **CAPTCHA Solving** (optional)
+   - 2captcha, anticaptcha
+   - Only as fallback
+   - Better to avoid CAPTCHAs entirely
+
 ## Implementation Considerations
 
 ### Session Persistence & Cookie Management
