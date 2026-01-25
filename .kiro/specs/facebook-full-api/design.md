@@ -1958,10 +1958,21 @@ facebook-api/
 │   ├── clickables/
 │   └── baselines/
 └── tests/
+    ├── conftest.py               # Pytest configuration
     ├── test_session.py
     ├── test_services.py
     ├── test_selectors.py         # NEW: Selector tests
-    └── test_api.py
+    ├── test_preflight_checker.py # NEW: Preflight tests
+    ├── test_api.py
+    ├── integration/              # NEW: Integration tests
+    │   ├── test_post_creation.py
+    │   ├── test_friend_requests.py
+    │   └── test_selector_updates.py
+    ├── e2e/                      # NEW: E2E tests
+    │   ├── test_real_facebook.py
+    │   └── test_selector_resilience.py
+    └── mocks/                    # NEW: Mock Facebook pages
+        └── facebook_pages.py
 ```
 
 ## Testing Strategy
@@ -1973,6 +1984,669 @@ facebook-api/
 - Selector validation tests
 - Rate limiting tests
 - Multi-account tests
+
+## Testing Strategy
+
+### Test Pyramid
+
+```
+                    ┌─────────────┐
+                    │   E2E Tests │  (5%)
+                    │  Real FB    │
+                    └─────────────┘
+                  ┌───────────────────┐
+                  │ Integration Tests │  (25%)
+                  │  Mock FB Pages    │
+                  └───────────────────┘
+              ┌─────────────────────────────┐
+              │      Unit Tests             │  (70%)
+              │  Individual Components      │
+              └─────────────────────────────┘
+```
+
+### Unit Tests (70% coverage target)
+
+**Test each component in isolation:**
+
+```python
+# tests/test_preflight_checker.py
+import pytest
+from src.core.preflight_checker import PreflightChecker, Action
+
+@pytest.fixture
+def checker():
+    return PreflightChecker()
+
+class TestAutomationFlagDetection:
+    async def test_clean_flags(self, checker):
+        """Test detection of clean automation flags"""
+        result = await checker.check_automation_flags()
+        assert result['clean'] == True
+        assert result['flags']['webdriver'] == False
+    
+    async def test_webdriver_detected(self, checker):
+        """Test detection when webdriver flag present"""
+        # Mock page with webdriver flag
+        result = await checker.check_automation_flags()
+        assert result['clean'] == False
+
+class TestRateLimiting:
+    async def test_within_limits(self, checker):
+        """Test action allowed when within rate limits"""
+        result = await checker.check_rate_limits("account1", "friend_request")
+        assert result == True
+    
+    async def test_exceeds_limits(self, checker):
+        """Test action blocked when exceeding rate limits"""
+        # Record 15 friend requests in last hour
+        for _ in range(15):
+            checker.record_action("account1", "friend_request")
+        
+        result = await checker.check_rate_limits("account1", "friend_request")
+        assert result == False
+    
+    async def test_delay_calculation(self, checker):
+        """Test delay calculation when approaching limit"""
+        for _ in range(12):
+            checker.record_action("account1", "post")
+        
+        validation = await checker.validate_action(
+            "account1", 
+            Action(type="post", data={})
+        )
+        assert validation.should_delay is not None
+        assert validation.should_delay > 0
+
+class TestSuspiciousPatterns:
+    async def test_rapid_fire_detection(self, checker):
+        """Test detection of rapid-fire actions"""
+        import time
+        now = time.time()
+        
+        # Record 3 actions within 1 second each
+        checker.action_history["account1"] = {
+            "like": [now, now + 0.5, now + 1.0]
+        }
+        
+        patterns = await checker.check_suspicious_patterns("account1")
+        assert any("too fast" in p for p in patterns)
+    
+    async def test_regular_timing_detection(self, checker):
+        """Test detection of too-regular timing"""
+        import time
+        now = time.time()
+        
+        # Record actions at exactly 5-second intervals
+        checker.action_history["account1"] = {
+            "post": [now, now + 5, now + 10, now + 15]
+        }
+        
+        patterns = await checker.check_suspicious_patterns("account1")
+        assert any("too regular" in p for p in patterns)
+    
+    async def test_burst_activity_detection(self, checker):
+        """Test detection of burst activity"""
+        import time
+        now = time.time()
+        
+        # Record 25 actions in last 5 minutes
+        checker.action_history["account1"] = {
+            "like": [now - i for i in range(25)]
+        }
+        
+        patterns = await checker.check_suspicious_patterns("account1")
+        assert any("Burst activity" in p for p in patterns)
+
+class TestAccountWarmth:
+    async def test_new_account_limits(self, checker):
+        """Test new account has strict limits"""
+        checker._account_ages = {"account1": 1}  # 1 day old
+        
+        # Record 15 actions today
+        import time
+        now = time.time()
+        checker.action_history["account1"] = {
+            "post": [now - i * 3600 for i in range(15)]
+        }
+        
+        warmth = await checker.check_account_warmth("account1")
+        assert warmth['too_aggressive'] == True
+        assert warmth['max_allowed'] == 10
+    
+    async def test_mature_account_limits(self, checker):
+        """Test mature account has higher limits"""
+        checker._account_ages = {"account1": 60}  # 60 days old
+        
+        # Record 150 actions today
+        import time
+        now = time.time()
+        checker.action_history["account1"] = {
+            "post": [now - i * 600 for i in range(150)]
+        }
+        
+        warmth = await checker.check_account_warmth("account1")
+        assert warmth['too_aggressive'] == False
+
+class TestRiskScoring:
+    async def test_low_risk_score(self, checker):
+        """Test low risk score for clean account"""
+        risk = await checker.get_risk_score("clean_account")
+        assert risk < 0.3
+    
+    async def test_high_risk_score(self, checker):
+        """Test high risk score for problematic account"""
+        # Set up problematic conditions
+        checker.action_history["bad_account"] = {
+            "post": [time.time() - i for i in range(50)]  # 50 posts recently
+        }
+        
+        risk = await checker.get_risk_score("bad_account")
+        assert risk > 0.7
+    
+    async def test_action_blocked_on_high_risk(self, checker):
+        """Test action blocked when risk too high"""
+        # Create high-risk scenario
+        checker.action_history["account1"] = {
+            "like": [time.time() - i for i in range(100)]
+        }
+        
+        validation = await checker.validate_action(
+            "account1",
+            Action(type="like", data={})
+        )
+        
+        assert validation.allowed == False
+        assert validation.risk_score > 0.7
+        assert len(validation.warnings) > 0
+
+# tests/test_selector_manager.py
+class TestSelectorManager:
+    async def test_selector_fallback(self, selector_manager):
+        """Test selector fallback when primary fails"""
+        result = await selector_manager.get_selector("friend_request_button")
+        assert result is not None
+    
+    async def test_selector_validation(self, selector_manager):
+        """Test selector validation detects failures"""
+        results = await selector_manager.validate_selectors()
+        assert isinstance(results, dict)
+        assert all(isinstance(v, bool) for v in results.values())
+    
+    async def test_selector_discovery(self, selector_manager):
+        """Test auto-discovery of new selectors"""
+        new_selector = await selector_manager.discover_selector(
+            "friend_request_button",
+            expected_text="Add Friend"
+        )
+        assert new_selector is not None
+
+# tests/test_session_manager.py
+class TestSessionManager:
+    async def test_cookie_persistence(self, session_manager):
+        """Test cookies are saved and loaded"""
+        await session_manager.save_cookies("account1")
+        assert os.path.exists("cookies/account1.json")
+        
+        await session_manager.load_cookies("account1")
+        # Verify cookies loaded
+    
+    async def test_session_validation(self, session_manager):
+        """Test session validation works"""
+        result = await session_manager.is_logged_in("account1")
+        assert isinstance(result, bool)
+    
+    async def test_remember_me_enabled(self, session_manager):
+        """Test Remember Me checkbox is checked during login"""
+        # Mock login flow
+        # Verify checkbox was checked
+
+# tests/test_action_handler.py
+class TestActionHandler:
+    async def test_preflight_integration(self, action_handler):
+        """Test preflight checks run before actions"""
+        action = Action(type="post", data={"content": "test"})
+        
+        # Should run preflight checks
+        result = await action_handler.execute_action("account1", action)
+        # Verify preflight was called
+    
+    async def test_action_blocked_on_validation_failure(self, action_handler):
+        """Test action blocked when validation fails"""
+        # Set up failing validation
+        with pytest.raises(ActionBlockedError):
+            await action_handler.execute_action("bad_account", action)
+    
+    async def test_delay_applied(self, action_handler):
+        """Test delay applied when recommended"""
+        # Mock validation returning delay
+        start = time.time()
+        await action_handler.execute_action("account1", action)
+        duration = time.time() - start
+        assert duration >= 2  # Delay was applied
+```
+
+### Integration Tests (25% coverage target)
+
+**Test component interactions with mocked Facebook pages:**
+
+```python
+# tests/integration/test_post_creation.py
+import pytest
+from playwright.async_api import async_playwright
+
+@pytest.fixture
+async def mock_facebook_page():
+    """Create mock Facebook page for testing"""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        
+        # Load mock HTML that mimics Facebook
+        await page.set_content("""
+            <html>
+                <body>
+                    <div data-testid="status-attachment-mentions-input">
+                        <textarea name="xhpc_message"></textarea>
+                    </div>
+                    <button name="post_button">Post</button>
+                </body>
+            </html>
+        """)
+        
+        yield page
+        await browser.close()
+
+class TestPostCreation:
+    async def test_create_text_post(self, mock_facebook_page, post_service):
+        """Test creating a text post"""
+        result = await post_service.create_post(
+            account_id="test_account",
+            content="Test post",
+            page=mock_facebook_page
+        )
+        
+        assert result['success'] == True
+        assert result['post_id'] is not None
+    
+    async def test_create_post_with_image(self, mock_facebook_page, post_service):
+        """Test creating post with image"""
+        result = await post_service.create_post(
+            account_id="test_account",
+            content="Test post",
+            images=["test_image.jpg"],
+            page=mock_facebook_page
+        )
+        
+        assert result['success'] == True
+        assert result['media_uploaded'] == True
+
+# tests/integration/test_friend_request_flow.py
+class TestFriendRequestFlow:
+    async def test_send_friend_request(self, mock_facebook_page, friends_service):
+        """Test complete friend request flow"""
+        result = await friends_service.send_friend_request(
+            account_id="test_account",
+            target_user_id="12345",
+            page=mock_facebook_page
+        )
+        
+        assert result['success'] == True
+        assert result['request_sent'] == True
+    
+    async def test_rate_limit_prevents_excessive_requests(self, friends_service):
+        """Test rate limiting prevents too many friend requests"""
+        # Send 15 requests
+        for i in range(15):
+            await friends_service.send_friend_request(
+                account_id="test_account",
+                target_user_id=f"user_{i}"
+            )
+        
+        # 16th should be blocked
+        with pytest.raises(RateLimitError):
+            await friends_service.send_friend_request(
+                account_id="test_account",
+                target_user_id="user_16"
+            )
+
+# tests/integration/test_selector_updates.py
+class TestSelectorUpdates:
+    async def test_selector_fallback_on_failure(self, page, selector_manager):
+        """Test selector fallback when primary fails"""
+        # Mock page with changed selectors
+        await page.set_content("""
+            <div aria-label="Add Friend" role="button">Add Friend</div>
+        """)
+        
+        # Primary selector fails, should use fallback
+        element = await selector_manager.find_element(
+            page, 
+            "friend_request_button"
+        )
+        
+        assert element is not None
+    
+    async def test_selector_auto_discovery(self, page, selector_manager):
+        """Test auto-discovery finds new selector"""
+        await page.set_content("""
+            <button data-new-attr="add-friend">Add Friend</button>
+        """)
+        
+        new_selector = await selector_manager.discover_selector(
+            "friend_request_button",
+            expected_text="Add Friend"
+        )
+        
+        assert "data-new-attr" in new_selector
+```
+
+### E2E Tests (5% coverage target)
+
+**Test with real Facebook account (use test account only):**
+
+```python
+# tests/e2e/test_real_facebook.py
+import pytest
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestRealFacebook:
+    """E2E tests with real Facebook - use test account only"""
+    
+    async def test_login_flow(self, api_client):
+        """Test complete login flow with real Facebook"""
+        response = await api_client.post("/auth", json={
+            "email": os.getenv("TEST_FB_EMAIL"),
+            "password": os.getenv("TEST_FB_PASSWORD")
+        })
+        
+        assert response.status_code == 200
+        assert response.json()['success'] == True
+    
+    async def test_create_and_delete_post(self, api_client):
+        """Test creating and deleting a post on real Facebook"""
+        # Create post
+        create_response = await api_client.post("/posts/create", json={
+            "content": f"Test post {datetime.now()}"
+        })
+        
+        assert create_response.status_code == 201
+        post_id = create_response.json()['post_id']
+        
+        # Verify post exists
+        get_response = await api_client.get(f"/posts/{post_id}")
+        assert get_response.status_code == 200
+        
+        # Delete post
+        delete_response = await api_client.delete(f"/posts/{post_id}")
+        assert delete_response.status_code == 200
+        
+        # Verify post deleted
+        get_response = await api_client.get(f"/posts/{post_id}")
+        assert get_response.status_code == 404
+    
+    async def test_preflight_prevents_rate_limit(self, api_client):
+        """Test preflight checker prevents hitting rate limits"""
+        # Send multiple friend requests rapidly
+        for i in range(20):
+            response = await api_client.post("/friends/request", json={
+                "user_id": f"test_user_{i}"
+            })
+            
+            if i < 15:
+                # Should succeed
+                assert response.status_code in [200, 202]
+            else:
+                # Should be blocked by preflight
+                assert response.status_code == 429
+                assert "rate limit" in response.json()['message'].lower()
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestSelectorResilience:
+    """Test selector resilience with real Facebook"""
+    
+    async def test_selectors_work_on_real_facebook(self, session_manager):
+        """Validate all selectors work on current Facebook UI"""
+        page = await session_manager.get_page("test_account")
+        
+        # Test each critical selector
+        selectors_to_test = [
+            ("login_button", "https://facebook.com"),
+            ("post_button", "https://facebook.com"),
+            ("friend_request_button", "https://facebook.com/profile/123"),
+        ]
+        
+        results = {}
+        for selector_name, url in selectors_to_test:
+            await page.goto(url)
+            element = await selector_manager.find_element(page, selector_name)
+            results[selector_name] = element is not None
+        
+        # Log failures for investigation
+        failures = [k for k, v in results.items() if not v]
+        if failures:
+            logger.error("selectors_failed_on_real_facebook", 
+                        failures=failures)
+        
+        # At least 80% should work
+        success_rate = sum(results.values()) / len(results)
+        assert success_rate >= 0.8
+```
+
+### Mock Facebook Pages
+
+**Create realistic mock pages for testing:**
+
+```python
+# tests/mocks/facebook_pages.py
+class MockFacebookPages:
+    """Generate mock Facebook HTML for testing"""
+    
+    @staticmethod
+    def login_page():
+        return """
+        <html>
+            <body>
+                <input name="email" type="text" />
+                <input name="pass" type="password" />
+                <input name="persistent" type="checkbox" />
+                <button name="login" type="submit">Log In</button>
+            </body>
+        </html>
+        """
+    
+    @staticmethod
+    def feed_page():
+        return """
+        <html>
+            <body>
+                <div role="article" data-post-id="123">
+                    <a href="/user/123">John Doe</a>
+                    <div>This is a test post</div>
+                    <span>Sponsored</span>
+                </div>
+                <div role="article" data-post-id="124">
+                    <a href="/user/124">Jane Smith</a>
+                    <div>Another test post</div>
+                </div>
+            </body>
+        </html>
+        """
+    
+    @staticmethod
+    def profile_page():
+        return """
+        <html>
+            <body>
+                <div data-pagelet="ProfileActions">
+                    <button aria-label="Add Friend">Add Friend</button>
+                    <button aria-label="Message">Message</button>
+                </div>
+            </body>
+        </html>
+        """
+```
+
+### Test Configuration
+
+```python
+# tests/conftest.py
+import pytest
+import os
+
+def pytest_configure(config):
+    """Configure pytest"""
+    config.addinivalue_line(
+        "markers", "e2e: mark test as end-to-end test"
+    )
+    config.addinivalue_line(
+        "markers", "slow: mark test as slow running"
+    )
+
+@pytest.fixture(scope="session")
+def test_account_credentials():
+    """Test account credentials from environment"""
+    return {
+        "email": os.getenv("TEST_FB_EMAIL"),
+        "password": os.getenv("TEST_FB_PASSWORD")
+    }
+
+@pytest.fixture
+async def api_client():
+    """FastAPI test client"""
+    from httpx import AsyncClient
+    from src.api.main import app
+    
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        yield client
+
+@pytest.fixture
+def mock_page():
+    """Mock Playwright page"""
+    # Return mock page object
+    pass
+
+# pytest.ini
+[pytest]
+markers =
+    e2e: End-to-end tests with real Facebook
+    slow: Slow running tests
+    unit: Unit tests
+    integration: Integration tests
+
+testpaths = tests
+python_files = test_*.py
+python_classes = Test*
+python_functions = test_*
+
+# Run only fast tests by default
+addopts = -v -m "not slow and not e2e"
+```
+
+### CI/CD Integration
+
+```yaml
+# .github/workflows/test.yml
+name: Tests
+
+on: [push, pull_request]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+      - name: Run unit tests
+        run: pytest tests/ -m "unit" --cov=src --cov-report=xml
+      - name: Upload coverage
+        uses: codecov/codecov-action@v2
+  
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+      - name: Run integration tests
+        run: pytest tests/ -m "integration"
+  
+  e2e-tests:
+    runs-on: ubuntu-latest
+    # Only run on main branch
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+      - name: Run E2E tests
+        env:
+          TEST_FB_EMAIL: ${{ secrets.TEST_FB_EMAIL }}
+          TEST_FB_PASSWORD: ${{ secrets.TEST_FB_PASSWORD }}
+        run: pytest tests/ -m "e2e"
+```
+
+### Test Coverage Goals
+
+- **Overall**: 80% code coverage
+- **Core Components**: 90% coverage
+  - PreflightChecker
+  - SessionManager
+  - SelectorManager
+- **Services**: 75% coverage
+- **API Routes**: 70% coverage
+
+### Testing Best Practices
+
+1. **Isolate Tests**: Each test should be independent
+2. **Mock External Dependencies**: Don't hit real Facebook in unit tests
+3. **Use Fixtures**: Reuse common setup code
+4. **Test Edge Cases**: Not just happy paths
+5. **Fast Tests**: Unit tests should run in < 1 second each
+6. **Descriptive Names**: Test names should describe what they test
+7. **Arrange-Act-Assert**: Clear test structure
+8. **Test One Thing**: Each test should verify one behavior
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run only unit tests
+pytest -m unit
+
+# Run only integration tests
+pytest -m integration
+
+# Run E2E tests (requires test account)
+pytest -m e2e
+
+# Run with coverage
+pytest --cov=src --cov-report=html
+
+# Run specific test file
+pytest tests/test_preflight_checker.py
+
+# Run specific test
+pytest tests/test_preflight_checker.py::TestRateLimiting::test_exceeds_limits
+
+# Run in parallel
+pytest -n auto
+```
 
 ## Monitoring & Observability
 
