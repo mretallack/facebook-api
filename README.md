@@ -105,3 +105,45 @@ Run login tests:
 python3.12 test_login.py        # Basic browser tests
 python3.12 test_real_login.py   # Actual login attempt
 ```
+
+## Technical Issues & Solutions
+
+### Issue: Cookie Dialog Blocking Login Button
+**Problem**: Facebook's cookie consent dialog overlay was intercepting click events on the login button. Playwright's click method failed with error:
+```
+<span>Essential cookies: These cookies are required to...</span> 
+from <div data-testid="cookie-policy-manage-dialog"> 
+subtree intercepts pointer events
+```
+
+**Solution**: Instead of trying to click through the dialog, use JavaScript to:
+1. Remove the cookie dialog: `document.querySelector('[data-testid="cookie-policy-manage-dialog"]').remove()`
+2. Click login button via JavaScript: `document.querySelector('button[name="login"]').click()`
+
+JavaScript clicks bypass Playwright's overlay detection, allowing the login to proceed.
+
+**Implementation**: See `src/scraper/session_manager.py` - `login()` method
+
+### Anti-Detection Measures
+To avoid Facebook blocking automation:
+- Custom user agent string (Chrome 120 on Linux)
+- Hide webdriver flag: `Object.defineProperty(navigator, 'webdriver', {get: () => undefined})`
+- Human-like typing with random delays (50-150ms per character)
+- Random delays between actions (0.3-4 seconds)
+- Disable automation-controlled Blink features
+
+### Session Persistence
+- Cookies saved to `cookies.json` after successful login
+- Automatically loaded on subsequent runs
+- Reduces login frequency and detection risk
+
+## Security
+
+**Important**: Never commit sensitive credentials to git!
+
+Protected files (in `.gitignore`):
+- `.env` - Contains Facebook credentials
+- `cookies.json` - Contains session cookies
+- `*.log` - May contain sensitive data
+
+Always use `.env.example` as template and keep actual `.env` file local only.

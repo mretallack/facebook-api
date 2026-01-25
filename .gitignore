@@ -18,6 +18,8 @@ dist/
 # Playwright
 .auth/
 cookies.json
+login_failed.png
+*.png
 
 # IDE
 .vscode/
