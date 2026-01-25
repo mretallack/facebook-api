@@ -1,149 +1,211 @@
-# Facebook Scraper API
+# Facebook Automation API
 
-Playwright-based API for extracting and filtering Facebook posts.
+A comprehensive Python/FastAPI-based Facebook automation API with anti-detection measures and rate limiting.
+
+## Features
+
+- **Profile Management**: Get/update profile, upload pictures
+- **Friends Management**: Search, send/accept requests, unfriend, block
+- **Posts Management**: Create, delete, like, comment, share posts
+- **Groups Management**: Search, join/leave, post to groups
+- **Messages**: Send messages, get conversations
+- **Anti-Detection**: Human-like behavior, rate limiting, preflight checks
+- **Robust Selectors**: Automatic fallback and auto-discovery
+- **UI Change Detection**: Proactive monitoring of Facebook UI changes
 
 ## Installation
 
-1. Install dependencies:
 ```bash
+# Install Python 3.12+
+python3.12 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
-```
 
-2. Install Playwright browser:
-```bash
+# Install Playwright browsers
 playwright install chromium
-```
-
-3. Configure environment:
-```bash
-cp .env.example .env
-# Edit .env with your Facebook credentials
 ```
 
 ## Configuration
 
-Edit `.env` file:
-```
+Create a `.env` file:
+
+```env
 FB_EMAIL=your_email@example.com
 FB_PASSWORD=your_password
+HEADLESS=true
 API_HOST=0.0.0.0
 API_PORT=8000
-HEADLESS=true
 ```
 
 ## Usage
 
-Start the API server:
+### Start the API
+
 ```bash
 python -m src.api.main
 ```
 
-Or with uvicorn:
+The API will be available at `http://localhost:8000`
+
+### API Documentation
+
+Interactive API docs: `http://localhost:8000/docs`
+
+### Example Requests
+
+#### Authentication
 ```bash
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+curl -X POST http://localhost:8000/auth \
+  -H "Content-Type: application/json" \
+  -d '{"email": "your@email.com", "password": "password"}'
+```
+
+#### Get Profile
+```bash
+curl http://localhost:8000/profile/me
+```
+
+#### Create Post
+```bash
+curl -X POST http://localhost:8000/posts/create \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Hello from API!", "privacy": "public"}'
+```
+
+#### Search Friends
+```bash
+curl "http://localhost:8000/friends/search?q=John&limit=10"
+```
+
+#### Send Message
+```bash
+curl -X POST http://localhost:8000/messages/send/CONVERSATION_ID \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello!"}'
 ```
 
 ## API Endpoints
 
-### GET /posts
-Extract posts from Facebook feed.
+### Profile
+- `GET /profile/me` - Get current profile
+- `PUT /profile/me` - Update profile
+- `POST /profile/picture` - Upload profile picture
+- `POST /profile/cover` - Upload cover photo
 
-Query parameters:
-- `limit` (int, default: 20): Number of posts to return
-- `offset` (int, default: 0): Pagination offset
-- `exclude_ads` (bool, default: false): Filter out sponsored posts
-- `exclude_suggested` (bool, default: false): Filter out suggested posts
-- `post_type` (str, optional): Filter by type (text|photo|video|link|mixed)
+### Friends
+- `GET /friends/search?q=query` - Search people
+- `GET /friends/list` - Get friends list
+- `GET /friends/requests` - Get friend requests
+- `POST /friends/request` - Send friend request
+- `POST /friends/accept/{id}` - Accept request
+- `DELETE /friends/{url}` - Unfriend
 
-Example:
+### Posts
+- `GET /posts/feed` - Get feed posts
+- `POST /posts/create` - Create post
+- `DELETE /posts/{id}` - Delete post
+- `POST /posts/{id}/like` - Like post
+- `POST /posts/{id}/comment` - Comment on post
+- `POST /posts/{id}/share` - Share post
+
+### Groups
+- `GET /groups/search?q=query` - Search groups
+- `GET /groups/{id}` - Get group info
+- `POST /groups/{id}/join` - Join group
+- `POST /groups/{id}/post` - Post to group
+
+### Messages
+- `GET /messages/conversations` - Get conversations
+- `GET /messages/{id}` - Get messages
+- `POST /messages/send/{id}` - Send message
+
+## Rate Limits
+
+Conservative rate limits to prevent account restrictions:
+
+- Friend requests: 15/hour
+- Posts: 8/hour
+- Messages: 40/hour
+- Likes: 80/hour
+- Comments: 20/hour
+- Group joins: 5/hour
+
+## Anti-Detection Features
+
+- **PreflightChecker**: Validates actions before execution, blocks risky operations
+- **Human-like behavior**: Random delays, natural typing speed, mouse movements
+- **Selector fallbacks**: Multiple selector strategies with auto-discovery
+- **UI change detection**: Monitors Facebook UI for changes
+- **Rate limiting**: Conservative limits based on research
+- **Session persistence**: Cookie-based authentication with "Remember Me"
+
+## Architecture
+
+```
+src/
+├── api/
+│   ├── main.py              # FastAPI application
+│   ├── models.py            # Pydantic models
+│   └── routes/              # API route handlers
+│       ├── profile.py
+│       ├── friends.py
+│       ├── posts.py
+│       ├── groups.py
+│       └── messages.py
+├── scraper/
+│   ├── session_manager.py   # Browser session management
+│   ├── preflight_checker.py # Risk assessment
+│   ├── selector_manager.py  # Selector fallbacks
+│   ├── ui_change_detector.py # UI monitoring
+│   ├── action_handler.py    # Base action class
+│   ├── profile_service.py   # Profile operations
+│   ├── friends_service.py   # Friends operations
+│   ├── posts_service.py     # Posts operations
+│   ├── groups_service.py    # Groups operations
+│   └── messages_service.py  # Messaging operations
+└── config/
+    └── settings.py          # Configuration
+```
+
+## Testing
+
 ```bash
-curl "http://localhost:8000/posts?limit=10&exclude_ads=true"
+# Run core component tests
+python test_core_components.py
+
+# Run login test
+python test_real_login.py
 ```
 
-### GET /health
-Check API and browser status.
+## Security Notes
 
-### POST /auth
-Authenticate with Facebook credentials.
+- Never commit `.env` file with credentials
+- Use test accounts for development
+- Be aware of Facebook's Terms of Service
+- Rate limits are conservative but not guaranteed safe
+- Account restrictions are possible with any automation
 
-Body:
-```json
-{
-  "email": "your_email@example.com",
-  "password": "your_password"
-}
-```
+## Technical Issues
 
-## Interactive Documentation
+### Facebook Detection
+Facebook actively detects and blocks automation. This API includes:
+- Anti-detection measures (custom user agent, webdriver flag hiding)
+- Conservative rate limiting
+- Human-like behavior patterns
+- Preflight checks to prevent risky actions
 
-Visit `http://localhost:8000/docs` for interactive API documentation.
+### Common Problems
+1. **Login failures**: Cookie dialog blocking - handled automatically
+2. **Selector changes**: Automatic fallback and discovery
+3. **Rate limiting**: Preflight checker blocks excessive actions
+4. **Account restrictions**: Use test accounts, follow rate limits
 
-## Notes
+## License
 
-- First run will require Facebook login
-- Session cookies are saved for reuse
-- 2FA may require manual intervention
-- Headless mode can be disabled for debugging (set `HEADLESS=false`)
-- If login fails, check:
-  - Credentials are correct
-  - Account doesn't require verification
-  - Account doesn't have 2FA enabled
-  - Facebook isn't blocking automation (try with `HEADLESS=false`)
+MIT
 
-## Troubleshooting
+## Disclaimer
 
-### Login Fails
-If automated login fails, you can manually login once:
-1. Set `HEADLESS=false` in `.env`
-2. Run the API
-3. Complete login manually in the browser window
-4. Cookies will be saved for future use
-
-### Testing
-Run login tests:
-```bash
-python3.12 test_login.py        # Basic browser tests
-python3.12 test_real_login.py   # Actual login attempt
-```
-
-## Technical Issues & Solutions
-
-### Issue: Cookie Dialog Blocking Login Button
-**Problem**: Facebook's cookie consent dialog overlay was intercepting click events on the login button. Playwright's click method failed with error:
-```
-<span>Essential cookies: These cookies are required to...</span> 
-from <div data-testid="cookie-policy-manage-dialog"> 
-subtree intercepts pointer events
-```
-
-**Solution**: Instead of trying to click through the dialog, use JavaScript to:
-1. Remove the cookie dialog: `document.querySelector('[data-testid="cookie-policy-manage-dialog"]').remove()`
-2. Click login button via JavaScript: `document.querySelector('button[name="login"]').click()`
-
-JavaScript clicks bypass Playwright's overlay detection, allowing the login to proceed.
-
-**Implementation**: See `src/scraper/session_manager.py` - `login()` method
-
-### Anti-Detection Measures
-To avoid Facebook blocking automation:
-- Custom user agent string (Chrome 120 on Linux)
-- Hide webdriver flag: `Object.defineProperty(navigator, 'webdriver', {get: () => undefined})`
-- Human-like typing with random delays (50-150ms per character)
-- Random delays between actions (0.3-4 seconds)
-- Disable automation-controlled Blink features
-
-### Session Persistence
-- Cookies saved to `cookies.json` after successful login
-- Automatically loaded on subsequent runs
-- Reduces login frequency and detection risk
-
-## Security
-
-**Important**: Never commit sensitive credentials to git!
-
-Protected files (in `.gitignore`):
-- `.env` - Contains Facebook credentials
-- `cookies.json` - Contains session cookies
-- `*.log` - May contain sensitive data
-
-Always use `.env.example` as template and keep actual `.env` file local only.
+This tool is for educational purposes. Automating Facebook violates their Terms of Service and may result in account restrictions or bans. Use at your own risk with test accounts only.
