@@ -1,5 +1,6 @@
 import json
 import asyncio
+import random
 from pathlib import Path
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 from config.settings import settings
@@ -73,47 +74,43 @@ class SessionManager:
             raise ValueError("Email and password required")
         
         await self.page.goto("https://www.facebook.com/")
-        await asyncio.sleep(3)
+        await asyncio.sleep(random.uniform(2, 4))
         
-        # Try to close cookie dialog - multiple possible selectors
+        # Try to dismiss cookie dialog with JavaScript
         try:
-            # Try common cookie accept buttons
-            selectors = [
-                'button[data-cookiebanner="accept_button"]',
-                'button:has-text("Allow all cookies")',
-                'button:has-text("Accept all")',
-                '[data-testid="cookie-policy-manage-dialog"] button:has-text("Allow")',
-                'button[title="Allow all cookies"]'
-            ]
-            for selector in selectors:
-                try:
-                    button = await self.page.wait_for_selector(selector, timeout=2000)
-                    if button:
-                        await button.click()
-                        await asyncio.sleep(1)
-                        break
-                except:
-                    continue
+            await self.page.evaluate("""
+                const dialog = document.querySelector('[data-testid="cookie-policy-manage-dialog"]');
+                if (dialog) dialog.remove();
+            """)
+            await asyncio.sleep(0.5)
         except:
             pass
         
-        # Fill login form
+        # Fill login form with human-like delays
         print(f"Filling email: {email[:10]}...")
-        await self.page.fill('input[name="email"]', email)
-        await asyncio.sleep(0.5)
+        email_input = await self.page.wait_for_selector('input[name="email"]')
+        await email_input.click()
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+        await email_input.type(email, delay=random.uniform(50, 150))
+        await asyncio.sleep(random.uniform(0.5, 1))
         
         print("Filling password...")
-        await self.page.fill('input[name="pass"]', password)
-        await asyncio.sleep(0.5)
+        pass_input = await self.page.wait_for_selector('input[name="pass"]')
+        await pass_input.click()
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+        await pass_input.type(password, delay=random.uniform(50, 150))
+        await asyncio.sleep(random.uniform(0.5, 1))
         
         print("Clicking login button...")
-        # Use force click to bypass overlays
-        await self.page.click('button[name="login"]', force=True)
+        # Use JavaScript click to bypass overlays
+        await self.page.evaluate("""
+            document.querySelector('button[name="login"]').click();
+        """)
         
         # Wait for navigation or error
         print("Waiting for response...")
         try:
-            await self.page.wait_for_load_state("networkidle", timeout=10000)
+            await self.page.wait_for_load_state("networkidle", timeout=15000)
         except:
             pass
         
