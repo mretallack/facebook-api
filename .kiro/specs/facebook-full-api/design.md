@@ -345,6 +345,548 @@ class QueueManager:
     async def get_queue_status()
 ```
 
+**PreflightChecker**:
+```python
+class PreflightChecker:
+    """Proactive detection of issues before they trigger on Facebook"""
+    
+    # Detection checks
+    async def check_automation_flags() -> Dict[str, bool]
+    async def check_fingerprint_consistency() -> bool
+    async def check_rate_limits(account_id: str, action: str) -> bool
+    async def check_session_health(account_id: str) -> bool
+    async def check_proxy_reputation(proxy: str) -> Dict
+    async def check_account_warmth(account_id: str) -> Dict
+    async def check_suspicious_patterns(account_id: str) -> List[str]
+    async def check_captcha_risk() -> float
+    async def check_ip_consistency(account_id: str) -> bool
+    async def check_timing_patterns() -> Dict
+    
+    # Comprehensive pre-action validation
+    async def validate_action(account_id: str, action: Action) -> ValidationResult
+    
+    # Continuous monitoring
+    async def monitor_session(account_id: str)
+    async def get_risk_score(account_id: str) -> float
+```
+
+**PreflightChecker Implementation**:
+
+```python
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+import time
+import statistics
+
+@dataclass
+class ValidationResult:
+    allowed: bool
+    risk_score: float  # 0.0 (safe) to 1.0 (high risk)
+    warnings: List[str]
+    recommendations: List[str]
+    should_delay: Optional[int]  # Seconds to wait before action
+
+class PreflightChecker:
+    """Proactive issue detection before Facebook triggers"""
+    
+    def __init__(self):
+        self.action_history = {}  # Track actions per account
+        self.timing_history = {}  # Track timing patterns
+        self.session_starts = {}  # Track session durations
+        
+    async def validate_action(self, account_id: str, action: Action) -> ValidationResult:
+        """Comprehensive pre-action validation"""
+        warnings = []
+        recommendations = []
+        risk_score = 0.0
+        should_delay = None
+        
+        # 1. Check automation flags
+        flags = await self.check_automation_flags()
+        if not flags['clean']:
+            warnings.append("Automation flags detected")
+            risk_score += 0.3
+            recommendations.append("Restart browser with proper flags")
+        
+        # 2. Check rate limits
+        if not await self.check_rate_limits(account_id, action.type):
+            warnings.append(f"Rate limit approaching for {action.type}")
+            risk_score += 0.4
+            should_delay = self._calculate_delay(account_id, action.type)
+            recommendations.append(f"Wait {should_delay}s before action")
+        
+        # 3. Check session health
+        if not await self.check_session_health(account_id):
+            warnings.append("Session may be expired or flagged")
+            risk_score += 0.5
+            recommendations.append("Validate and refresh session")
+        
+        # 4. Check suspicious patterns
+        patterns = await self.check_suspicious_patterns(account_id)
+        if patterns:
+            warnings.extend(patterns)
+            risk_score += 0.2 * len(patterns)
+            recommendations.append("Vary action timing and patterns")
+        
+        # 5. Check timing patterns
+        timing = await self.check_timing_patterns()
+        if timing['too_regular']:
+            warnings.append("Actions too regular - appears robotic")
+            risk_score += 0.3
+            recommendations.append("Add random delays between actions")
+        
+        # 6. Check account warmth
+        warmth = await self.check_account_warmth(account_id)
+        if warmth['too_aggressive']:
+            warnings.append("Activity too aggressive for account age")
+            risk_score += 0.4
+            recommendations.append("Reduce activity frequency")
+        
+        # 7. Check CAPTCHA risk
+        captcha_risk = await self.check_captcha_risk()
+        if captcha_risk > 0.7:
+            warnings.append("High CAPTCHA risk detected")
+            risk_score += 0.3
+            recommendations.append("Reduce activity and add delays")
+        
+        # 8. Check IP consistency
+        if not await self.check_ip_consistency(account_id):
+            warnings.append("IP location changed - may trigger security check")
+            risk_score += 0.5
+            recommendations.append("Use consistent proxy for this account")
+        
+        # 9. Check proxy reputation
+        proxy_check = await self.check_proxy_reputation(self._get_current_proxy())
+        if proxy_check['blacklisted']:
+            warnings.append("Proxy IP is blacklisted")
+            risk_score += 0.6
+            recommendations.append("Switch to different proxy")
+        
+        # 10. Check fingerprint consistency
+        if not await self.check_fingerprint_consistency():
+            warnings.append("Browser fingerprint inconsistent")
+            risk_score += 0.4
+            recommendations.append("Maintain consistent browser profile")
+        
+        # Determine if action should be allowed
+        allowed = risk_score < 0.7  # Block if risk too high
+        
+        return ValidationResult(
+            allowed=allowed,
+            risk_score=min(risk_score, 1.0),
+            warnings=warnings,
+            recommendations=recommendations,
+            should_delay=should_delay
+        )
+    
+    async def check_automation_flags(self) -> Dict[str, bool]:
+        """Check for automation detection flags"""
+        page = self._get_current_page()
+        
+        flags = await page.evaluate("""
+            () => {
+                return {
+                    webdriver: navigator.webdriver,
+                    chrome: !!window.chrome,
+                    permissions: navigator.permissions !== undefined,
+                    plugins: navigator.plugins.length > 0,
+                    languages: navigator.languages.length > 0,
+                    headless: navigator.userAgent.includes('Headless'),
+                    automation: navigator.webdriver === true
+                };
+            }
+        """)
+        
+        clean = (
+            not flags['webdriver'] and
+            flags['chrome'] and
+            flags['plugins'] and
+            not flags['headless']
+        )
+        
+        return {'clean': clean, 'flags': flags}
+    
+    async def check_rate_limits(self, account_id: str, action_type: str) -> bool:
+        """Check if action would exceed rate limits"""
+        if account_id not in self.action_history:
+            self.action_history[account_id] = {}
+        
+        if action_type not in self.action_history[account_id]:
+            self.action_history[account_id][action_type] = []
+        
+        # Get actions in last hour
+        now = time.time()
+        recent_actions = [
+            t for t in self.action_history[account_id][action_type]
+            if now - t < 3600
+        ]
+        
+        # Check against limits (80% threshold for warning)
+        limits = {
+            'friend_request': 12,  # 80% of 15
+            'post': 6,             # 80% of 8
+            'message': 32,         # 80% of 40
+            'like': 64,            # 80% of 80
+            'comment': 24,         # 80% of 30
+        }
+        
+        limit = limits.get(action_type, 50)
+        return len(recent_actions) < limit
+    
+    async def check_session_health(self, account_id: str) -> bool:
+        """Check if session is healthy"""
+        try:
+            page = self._get_page(account_id)
+            
+            # Quick check: can we access a protected page?
+            response = await page.goto("https://www.facebook.com/me", 
+                                      wait_until="domcontentloaded",
+                                      timeout=5000)
+            
+            # Check for login redirect
+            if "login" in page.url:
+                return False
+            
+            # Check for security checkpoint
+            checkpoint = await page.query_selector('text="Security Check"')
+            if checkpoint:
+                return False
+            
+            return response.status == 200
+        except:
+            return False
+    
+    async def check_suspicious_patterns(self, account_id: str) -> List[str]:
+        """Detect suspicious activity patterns"""
+        patterns = []
+        
+        if account_id not in self.action_history:
+            return patterns
+        
+        history = self.action_history[account_id]
+        
+        # Check for rapid-fire actions
+        for action_type, timestamps in history.items():
+            if len(timestamps) >= 3:
+                recent = sorted(timestamps[-3:])
+                intervals = [recent[i+1] - recent[i] for i in range(len(recent)-1)]
+                
+                # Too fast (< 2 seconds between actions)
+                if any(interval < 2 for interval in intervals):
+                    patterns.append(f"Actions too fast: {action_type}")
+                
+                # Too regular (same interval repeatedly)
+                if len(set(round(i) for i in intervals)) == 1:
+                    patterns.append(f"Actions too regular: {action_type}")
+        
+        # Check for burst activity
+        now = time.time()
+        recent_5min = sum(
+            len([t for t in timestamps if now - t < 300])
+            for timestamps in history.values()
+        )
+        
+        if recent_5min > 20:
+            patterns.append("Burst activity detected (>20 actions in 5 min)")
+        
+        # Check session duration
+        if account_id in self.session_starts:
+            duration = now - self.session_starts[account_id]
+            total_actions = sum(len(timestamps) for timestamps in history.values())
+            
+            # Too many actions for session duration
+            if duration < 600 and total_actions > 30:  # 30 actions in < 10 min
+                patterns.append("Too many actions for session duration")
+        
+        return patterns
+    
+    async def check_timing_patterns(self) -> Dict:
+        """Analyze timing patterns for regularity"""
+        if not self.timing_history:
+            return {'too_regular': False}
+        
+        # Get all action intervals
+        all_intervals = []
+        for account_history in self.timing_history.values():
+            for timestamps in account_history.values():
+                if len(timestamps) >= 2:
+                    sorted_times = sorted(timestamps)
+                    intervals = [sorted_times[i+1] - sorted_times[i] 
+                               for i in range(len(sorted_times)-1)]
+                    all_intervals.extend(intervals)
+        
+        if len(all_intervals) < 5:
+            return {'too_regular': False}
+        
+        # Check variance
+        mean = statistics.mean(all_intervals)
+        stdev = statistics.stdev(all_intervals) if len(all_intervals) > 1 else 0
+        
+        # Low variance = too regular
+        coefficient_of_variation = stdev / mean if mean > 0 else 0
+        too_regular = coefficient_of_variation < 0.3  # Less than 30% variation
+        
+        return {
+            'too_regular': too_regular,
+            'mean_interval': mean,
+            'stdev': stdev,
+            'cv': coefficient_of_variation
+        }
+    
+    async def check_account_warmth(self, account_id: str) -> Dict:
+        """Check if account activity matches its age/history"""
+        # Get account age (from database or config)
+        account_age_days = self._get_account_age(account_id)
+        
+        # Get recent activity
+        if account_id not in self.action_history:
+            return {'too_aggressive': False}
+        
+        now = time.time()
+        actions_today = sum(
+            len([t for t in timestamps if now - t < 86400])
+            for timestamps in self.action_history[account_id].values()
+        )
+        
+        # Expected activity based on account age
+        expected_max = {
+            1: 10,    # Day 1: max 10 actions
+            2: 20,    # Day 2: max 20 actions
+            3: 30,    # Day 3: max 30 actions
+            7: 50,    # Week 1: max 50 actions
+            14: 100,  # Week 2: max 100 actions
+            30: 200,  # Month 1: max 200 actions
+        }
+        
+        max_allowed = 200  # Default for mature accounts
+        for days, limit in sorted(expected_max.items()):
+            if account_age_days <= days:
+                max_allowed = limit
+                break
+        
+        too_aggressive = actions_today > max_allowed
+        
+        return {
+            'too_aggressive': too_aggressive,
+            'actions_today': actions_today,
+            'max_allowed': max_allowed,
+            'account_age_days': account_age_days
+        }
+    
+    async def check_captcha_risk(self) -> float:
+        """Estimate CAPTCHA risk based on recent activity"""
+        # Factors that increase CAPTCHA risk:
+        risk = 0.0
+        
+        # 1. High action frequency
+        total_recent = sum(
+            len([t for t in timestamps if time.time() - t < 3600])
+            for history in self.action_history.values()
+            for timestamps in history.values()
+        )
+        if total_recent > 50:
+            risk += 0.3
+        
+        # 2. Failed actions recently
+        # (would track this separately)
+        
+        # 3. Suspicious patterns detected
+        for account_id in self.action_history:
+            patterns = await self.check_suspicious_patterns(account_id)
+            risk += 0.1 * len(patterns)
+        
+        return min(risk, 1.0)
+    
+    async def check_ip_consistency(self, account_id: str) -> bool:
+        """Check if IP/location is consistent for account"""
+        current_ip = self._get_current_ip()
+        
+        if account_id not in self._ip_history:
+            self._ip_history[account_id] = []
+        
+        history = self._ip_history[account_id]
+        
+        # First use - record it
+        if not history:
+            history.append(current_ip)
+            return True
+        
+        # Check if current IP matches recent history
+        return current_ip in history[-5:]  # Last 5 IPs
+    
+    async def check_proxy_reputation(self, proxy: str) -> Dict:
+        """Check proxy IP reputation"""
+        # Would integrate with IP reputation services
+        # For now, basic checks
+        
+        return {
+            'blacklisted': False,  # Check against known blacklists
+            'datacenter': False,   # Detect datacenter IPs
+            'vpn': False,          # Detect VPN IPs
+            'reputation_score': 0.8  # 0.0 (bad) to 1.0 (good)
+        }
+    
+    async def check_fingerprint_consistency(self) -> bool:
+        """Check browser fingerprint hasn't changed"""
+        page = self._get_current_page()
+        
+        current_fp = await page.evaluate("""
+            () => {
+                return {
+                    user_agent: navigator.userAgent,
+                    platform: navigator.platform,
+                    language: navigator.language,
+                    screen: `${screen.width}x${screen.height}`,
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                };
+            }
+        """)
+        
+        # Compare with stored fingerprint
+        if not hasattr(self, '_stored_fingerprint'):
+            self._stored_fingerprint = current_fp
+            return True
+        
+        return current_fp == self._stored_fingerprint
+    
+    async def monitor_session(self, account_id: str):
+        """Continuous session monitoring"""
+        while True:
+            await asyncio.sleep(60)  # Check every minute
+            
+            # Check session health
+            healthy = await self.check_session_health(account_id)
+            if not healthy:
+                logger.warning("session_unhealthy", account_id=account_id)
+                await self._alert_session_issue(account_id)
+            
+            # Check risk score
+            risk = await self.get_risk_score(account_id)
+            if risk > 0.8:
+                logger.warning("high_risk_detected", 
+                             account_id=account_id, 
+                             risk=risk)
+                await self._alert_high_risk(account_id, risk)
+    
+    async def get_risk_score(self, account_id: str) -> float:
+        """Calculate overall risk score for account"""
+        # Aggregate all checks
+        checks = [
+            (await self.check_automation_flags())['clean'],
+            await self.check_session_health(account_id),
+            await self.check_ip_consistency(account_id),
+            await self.check_fingerprint_consistency(),
+        ]
+        
+        patterns = await self.check_suspicious_patterns(account_id)
+        warmth = await self.check_account_warmth(account_id)
+        captcha_risk = await self.check_captcha_risk()
+        
+        # Calculate score
+        risk = 0.0
+        risk += 0.2 if not checks[0] else 0  # Automation flags
+        risk += 0.3 if not checks[1] else 0  # Session health
+        risk += 0.1 if not checks[2] else 0  # IP consistency
+        risk += 0.1 if not checks[3] else 0  # Fingerprint
+        risk += 0.05 * len(patterns)         # Suspicious patterns
+        risk += 0.2 if warmth['too_aggressive'] else 0
+        risk += 0.1 * captcha_risk
+        
+        return min(risk, 1.0)
+    
+    def record_action(self, account_id: str, action_type: str):
+        """Record action for tracking"""
+        if account_id not in self.action_history:
+            self.action_history[account_id] = {}
+        if action_type not in self.action_history[account_id]:
+            self.action_history[account_id][action_type] = []
+        
+        self.action_history[account_id][action_type].append(time.time())
+```
+
+**Integration with Action Handler**:
+
+```python
+class ActionHandler:
+    def __init__(self):
+        self.preflight = PreflightChecker()
+    
+    async def execute_action(self, account_id: str, action: Action):
+        """Execute action with preflight checks"""
+        
+        # Preflight validation
+        validation = await self.preflight.validate_action(account_id, action)
+        
+        if not validation.allowed:
+            logger.error("action_blocked", 
+                        account_id=account_id,
+                        action=action.type,
+                        risk_score=validation.risk_score,
+                        warnings=validation.warnings)
+            raise ActionBlockedError(
+                f"Action blocked due to high risk: {validation.warnings}"
+            )
+        
+        # Log warnings
+        if validation.warnings:
+            logger.warning("action_warnings",
+                         account_id=account_id,
+                         warnings=validation.warnings,
+                         recommendations=validation.recommendations)
+        
+        # Apply delay if recommended
+        if validation.should_delay:
+            logger.info("applying_delay", 
+                       account_id=account_id,
+                       delay=validation.should_delay)
+            await asyncio.sleep(validation.should_delay)
+        
+        # Execute action
+        try:
+            result = await self._perform_action(action)
+            
+            # Record successful action
+            self.preflight.record_action(account_id, action.type)
+            
+            return result
+        except Exception as e:
+            logger.error("action_failed", 
+                        account_id=account_id,
+                        action=action.type,
+                        error=str(e))
+            raise
+```
+
+**Dashboard Integration**:
+
+```python
+@app.get("/health/preflight/{account_id}")
+async def get_preflight_status(account_id: str):
+    """Get preflight check status for account"""
+    checker = get_preflight_checker()
+    
+    risk_score = await checker.get_risk_score(account_id)
+    validation = await checker.validate_action(
+        account_id, 
+        Action(type="test", data={})
+    )
+    
+    return {
+        "account_id": account_id,
+        "risk_score": risk_score,
+        "status": "safe" if risk_score < 0.3 else "warning" if risk_score < 0.7 else "danger",
+        "warnings": validation.warnings,
+        "recommendations": validation.recommendations,
+        "checks": {
+            "automation_flags": (await checker.check_automation_flags())['clean'],
+            "session_health": await checker.check_session_health(account_id),
+            "rate_limits_ok": await checker.check_rate_limits(account_id, "test"),
+            "ip_consistent": await checker.check_ip_consistency(account_id),
+            "fingerprint_consistent": await checker.check_fingerprint_consistency(),
+        }
+    }
+```
+
 ### 4. Data Models
 
 **Pydantic Models**:
@@ -1397,7 +1939,8 @@ facebook-api/
 │   │   ├── queue_manager.py
 │   │   ├── selector_manager.py   # NEW: Selector management
 │   │   ├── ui_detector.py        # NEW: UI change detection
-│   │   └── alert_manager.py      # NEW: Alerting system
+│   │   ├── alert_manager.py      # NEW: Alerting system
+│   │   └── preflight_checker.py  # NEW: Proactive issue detection
 │   └── utils/
 │       ├── selectors.py
 │       ├── selectors.json         # NEW: Selector database
