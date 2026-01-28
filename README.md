@@ -1,211 +1,549 @@
 # Facebook Automation API
 
-A comprehensive Python/FastAPI-based Facebook automation API with anti-detection measures and rate limiting.
+A comprehensive REST API for automating Facebook interactions using Playwright. Supports posts, friends, groups, messages, events, pages, marketplace, and stories.
+
+## ⚠️ How Facebook Renders Posts
+
+### The Rendering Mechanism
+
+Facebook uses **client-side JavaScript rendering** to display posts. Here's how it works:
+
+1. **Initial HTML Load**: When you navigate to a profile, Facebook sends minimal HTML
+   - Contains page structure, navigation, header
+   - **Does NOT contain post content** in the initial HTML
+
+2. **JavaScript Execution**: After page load, JavaScript makes GraphQL requests
+   - Fetches post data from Facebook's API
+   - Dynamically creates DOM elements for posts
+   - Inserts `[role="article"]` elements into the page
+
+3. **Virtual Scrolling**: As you scroll, Facebook:
+   - Loads new posts via GraphQL (~28 requests per session)
+   - Adds new `[role="article"]` elements to DOM
+   - **Removes old articles** from DOM to save memory
+   - Article count fluctuates: 2→3→5→8→2 (old posts removed)
+
+4. **Text Content**: Post text is rendered as:
+   - `<div dir="auto">` elements containing the actual text
+   - Text is **only in the DOM**, not in the initial HTML source
+   - Must extract from live DOM, not from `page.content()`
+
+### Why Traditional Scraping Fails
+
+❌ **Viewing page source** - Shows empty structure, no posts
+❌ **Extracting after scrolling** - Old posts removed by virtual scrolling
+❌ **JSON extraction** - Facebook no longer uses `<script type="application/json">` tags
+❌ **Profile timeline** - Shows comments/activity, not actual posts
+
+### What Works ✅
+
+**Scroll-and-Extract Pattern**:
+```python
+for i in range(30):
+    # Extract posts DURING scroll
+    articles = await page.query_selector_all('[role="article"]')
+    for article in articles:
+        text_elements = await article.query_selector_all('[dir="auto"]')
+        # Extract text from live DOM
+    
+    # Then scroll
+    await page.evaluate('window.scrollBy(0, 300)')
+    await asyncio.sleep(1.5)
+```
+
+**Key Techniques**:
+- Extract from **live DOM** during scrolling
+- Use `[role="article"]` selector for posts
+- Use `[dir="auto"]` selector for text content
+- Session keep-alive (refresh every 3-5 minutes)
+- Detect comments vs posts via `comment_id` in links
+
+### Performance Metrics
+- Initial load: 2 articles
+- After 30 scrolls: 10-16 unique posts
+- GraphQL requests: ~28 per session
+- Time per scroll: ~1.5 seconds
+- Total scrape time: ~45 seconds
 
 ## Features
 
-- **Profile Management**: Get/update profile, upload pictures
-- **Friends Management**: Search, send/accept requests, unfriend, block
-- **Posts Management**: Create, delete, like, comment, share posts
-- **Groups Management**: Search, join/leave, post to groups
-- **Messages**: Send messages, get conversations
-- **Anti-Detection**: Human-like behavior, rate limiting, preflight checks
-- **Robust Selectors**: Automatic fallback and auto-discovery
-- **UI Change Detection**: Proactive monitoring of Facebook UI changes
+- ✅ **Multi-Account Support** - Manage multiple Facebook accounts simultaneously
+- ✅ **Profile Management** - Get/update profiles, upload pictures
+- ✅ **Friends Management** - Search, send/accept requests, unfriend, block
+- ✅ **Posts Management** - Create, delete, like, comment, share posts
+- ✅ **Groups Management** - Search, join/leave, post to groups
+- ✅ **Messaging** - Send messages, get conversations
+- ✅ **Events** - Search events, RSVP
+- ✅ **Pages** - Search, like, post to pages
+- ✅ **Marketplace** - Search listings, create listings
+- ✅ **Stories** - View, create, delete stories
+- ✅ **GraphQL Interception** - Extract data from Facebook's GraphQL API
+- ✅ **Rate Limiting** - Automatic rate limiting per account
+- ✅ **Caching** - In-memory caching with TTL
+- ✅ **Queue Management** - Priority-based async task queue
+- ✅ **Session Keep-Alive** - Automatic session refresh to prevent expiration
 
 ## Installation
 
 ```bash
-# Install Python 3.12+
-python3.12 -m venv venv
-source venv/bin/activate
+# Clone repository
+git clone <repository-url>
+cd facebook
 
 # Install dependencies
 pip install -r requirements.txt
 
 # Install Playwright browsers
 playwright install chromium
+
+# Create .env file
+cp .env.example .env
+# Edit .env with your credentials
 ```
 
 ## Configuration
 
-Create a `.env` file:
+Create `.env` file:
 
 ```env
 FB_EMAIL=your_email@example.com
 FB_PASSWORD=your_password
 HEADLESS=true
-API_HOST=0.0.0.0
-API_PORT=8000
+COOKIES_FILE=cookies/default.json
 ```
 
-## Usage
-
-### Start the API
+## Quick Start
 
 ```bash
-python -m src.api.main
+# Start the API server
+python3 -m src.api.main
+
+# API will be available at http://localhost:8000
 ```
 
-The API will be available at `http://localhost:8000`
+## API Documentation
 
-### API Documentation
+### Authentication
 
-Interactive API docs: `http://localhost:8000/docs`
-
-### Example Requests
-
-#### Authentication
 ```bash
-curl -X POST http://localhost:8000/auth \
-  -H "Content-Type: application/json" \
-  -d '{"email": "your@email.com", "password": "password"}'
+POST /auth
+{
+  "email": "your_email@example.com",
+  "password": "your_password"
+}
 ```
-
-#### Get Profile
-```bash
-curl http://localhost:8000/profile/me
-```
-
-#### Create Post
-```bash
-curl -X POST http://localhost:8000/posts/create \
-  -H "Content-Type: application/json" \
-  -d '{"content": "Hello from API!", "privacy": "public"}'
-```
-
-#### Search Friends
-```bash
-curl "http://localhost:8000/friends/search?q=John&limit=10"
-```
-
-#### Send Message
-```bash
-curl -X POST http://localhost:8000/messages/send/CONVERSATION_ID \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello!"}'
-```
-
-## API Endpoints
 
 ### Profile
-- `GET /profile/me` - Get current profile
-- `PUT /profile/me` - Update profile
-- `POST /profile/picture` - Upload profile picture
-- `POST /profile/cover` - Upload cover photo
+
+```bash
+# Get your profile
+GET /profile/me
+
+# Update profile
+PUT /profile/me
+{
+  "bio": "New bio text"
+}
+
+# Upload profile picture
+POST /profile/picture
+Content-Type: multipart/form-data
+file: <image_file>
+```
 
 ### Friends
-- `GET /friends/search?q=query` - Search people
-- `GET /friends/list` - Get friends list
-- `GET /friends/requests` - Get friend requests
-- `POST /friends/request` - Send friend request
-- `POST /friends/accept/{id}` - Accept request
-- `DELETE /friends/{url}` - Unfriend
+
+```bash
+# Search people
+GET /friends/search?query=john
+
+# Send friend request
+POST /friends/request
+{
+  "profile_url": "https://facebook.com/user123"
+}
+
+# Accept friend request
+POST /friends/accept/{request_id}
+
+# Unfriend
+DELETE /friends/{profile_url}
+```
 
 ### Posts
-- `GET /posts/feed` - Get feed posts
-- `POST /posts/create` - Create post
-- `DELETE /posts/{id}` - Delete post
-- `POST /posts/{id}/like` - Like post
-- `POST /posts/{id}/comment` - Comment on post
-- `POST /posts/{id}/share` - Share post
+
+```bash
+# Get feed
+GET /posts/feed?limit=10
+
+# Create post
+POST /posts/create
+{
+  "content": "Hello world!",
+  "privacy": "public"
+}
+
+# Like post
+POST /posts/{post_id}/like
+
+# Comment on post
+POST /posts/{post_id}/comment
+{
+  "comment": "Great post!"
+}
+
+# Delete post
+DELETE /posts/{post_id}
+```
 
 ### Groups
-- `GET /groups/search?q=query` - Search groups
-- `GET /groups/{id}` - Get group info
-- `POST /groups/{id}/join` - Join group
-- `POST /groups/{id}/post` - Post to group
+
+```bash
+# Search groups
+GET /groups/search?query=python
+
+# Get group details
+GET /groups/{group_id}
+
+# Join group
+POST /groups/{group_id}/join
+
+# Post to group
+POST /groups/{group_id}/post
+{
+  "content": "Hello group!"
+}
+```
 
 ### Messages
-- `GET /messages/conversations` - Get conversations
-- `GET /messages/{id}` - Get messages
-- `POST /messages/send/{id}` - Send message
 
-## Rate Limits
+```bash
+# Get conversations
+GET /messages/conversations
 
-Conservative rate limits to prevent account restrictions:
+# Get messages from conversation
+GET /messages/{conversation_id}
+
+# Send message
+POST /messages/send/{user_id}
+{
+  "message": "Hello!"
+}
+```
+
+### Events
+
+```bash
+# Search events
+GET /events/search?query=concert
+
+# Get event details
+GET /events/{event_id}
+
+# RSVP to event
+POST /events/{event_id}/rsvp
+{
+  "response": "going"  # or "interested", "not_going"
+}
+```
+
+### Pages
+
+```bash
+# Search pages
+GET /pages/search?query=tech
+
+# Get page details
+GET /pages/{page_id}
+
+# Like page
+POST /pages/{page_id}/like
+
+# Post to page (requires admin)
+POST /pages/{page_id}/post
+{
+  "content": "New update!"
+}
+```
+
+### Marketplace
+
+```bash
+# Search listings
+GET /marketplace/search?query=laptop
+
+# Get listing details
+GET /marketplace/{listing_id}
+
+# Create listing
+POST /marketplace/create
+{
+  "title": "Laptop for sale",
+  "price": "500",
+  "description": "Great condition",
+  "category": "electronics"
+}
+```
+
+### Stories
+
+```bash
+# Get stories
+GET /stories/feed
+
+# Create text story
+POST /stories/create
+{
+  "text": "Hello from my story!"
+}
+
+# Create photo story
+POST /stories/create
+Content-Type: multipart/form-data
+image: <image_file>
+
+# Delete story
+DELETE /stories/{story_id}
+```
+
+### Search
+
+```bash
+# Search people
+GET /search/people?query=john
+
+# Get profile details
+GET /search/profile?url=https://facebook.com/user123
+```
+
+## Multi-Account Usage
+
+```python
+from src.scraper.session_manager import SessionManager
+
+# Create session manager
+session = SessionManager()
+
+# Start account 1
+await session.start("account1")
+await session.login("email1@example.com", "password1", "account1")
+
+# Start account 2
+await session.start("account2")
+await session.login("email2@example.com", "password2", "account2")
+
+# Switch between accounts
+page1 = await session.switch_account("account1")
+page2 = await session.switch_account("account2")
+
+# Get specific account page
+page = session.get_page("account1")
+```
+
+## Rate Limiting
+
+The API automatically enforces rate limits per account:
 
 - Friend requests: 15/hour
 - Posts: 8/hour
 - Messages: 40/hour
 - Likes: 80/hour
-- Comments: 20/hour
-- Group joins: 5/hour
+- Comments: 30/hour
 
-## Anti-Detection Features
+## Caching
 
-- **PreflightChecker**: Validates actions before execution, blocks risky operations
-- **Human-like behavior**: Random delays, natural typing speed, mouse movements
-- **Selector fallbacks**: Multiple selector strategies with auto-discovery
-- **UI change detection**: Monitors Facebook UI for changes
-- **Rate limiting**: Conservative limits based on research
-- **Session persistence**: Cookie-based authentication with "Remember Me"
+Responses are cached with TTL:
+
+```python
+from src.core.cache_manager import cache
+
+# Set cache
+await cache.set("key", "value", ttl=300)  # 5 minutes
+
+# Get cache
+value = await cache.get("key")
+
+# Delete cache
+await cache.delete("key")
+
+# Get stats
+stats = cache.stats()
+```
+
+## Queue Management
+
+Priority-based async task queue:
+
+```python
+from src.core.queue_manager import queue, Priority
+
+# Enqueue task
+task_id = await queue.enqueue(
+    "task1",
+    my_function,
+    args=("arg1",),
+    priority=Priority.HIGH,
+    account_id="account1"
+)
+
+# Start queue
+await queue.start()
+
+# Get task status
+status = queue.get_status(task_id)
+
+# Get stats
+stats = queue.stats()
+```
+
+## GraphQL Interception
+
+The API intercepts Facebook's GraphQL responses for more reliable data extraction:
+
+```python
+from src.core.graphql_extractor import GraphQLExtractor
+
+extractor = GraphQLExtractor()
+await extractor.intercept_responses(page)
+
+# Navigate to page
+await page.goto(url)
+
+# Extract profile data
+profile = extractor.extract_profile()
+
+# Save responses for debugging
+extractor.save_responses('/tmp/graphql.json')
+```
 
 ## Architecture
 
 ```
-src/
-├── api/
-│   ├── main.py              # FastAPI application
-│   ├── models.py            # Pydantic models
-│   └── routes/              # API route handlers
-│       ├── profile.py
-│       ├── friends.py
-│       ├── posts.py
-│       ├── groups.py
-│       └── messages.py
-├── scraper/
-│   ├── session_manager.py   # Browser session management
-│   ├── preflight_checker.py # Risk assessment
-│   ├── selector_manager.py  # Selector fallbacks
-│   ├── ui_change_detector.py # UI monitoring
-│   ├── action_handler.py    # Base action class
-│   ├── profile_service.py   # Profile operations
-│   ├── friends_service.py   # Friends operations
-│   ├── posts_service.py     # Posts operations
-│   ├── groups_service.py    # Groups operations
-│   └── messages_service.py  # Messaging operations
-└── config/
-    └── settings.py          # Configuration
+facebook-api/
+├── src/
+│   ├── api/              # FastAPI routes and models
+│   ├── core/             # Core components
+│   │   ├── cache_manager.py
+│   │   ├── queue_manager.py
+│   │   └── graphql_extractor.py
+│   ├── scraper/          # Playwright automation
+│   │   ├── session_manager.py
+│   │   ├── post_extractor.py
+│   │   └── search_service.py
+│   └── services/         # Business logic
+│       ├── events_service.py
+│       ├── pages_service.py
+│       ├── marketplace_service.py
+│       └── stories_service.py
+├── config/               # Configuration
+├── cookies/              # Session cookies (per account)
+└── tests/                # Tests
 ```
 
-## Testing
+## Security
+
+- Store credentials in `.env` file (never commit)
+- Cookies are stored per account in `cookies/` directory
+- Add `cookies/` and `.env` to `.gitignore`
+- Use HTTPS in production
+- Implement API key authentication for production use
+
+## Rate Limits & Best Practices
+
+1. **Respect Facebook's Terms of Service**
+2. **Use reasonable delays between actions**
+3. **Don't exceed rate limits**
+4. **Use residential proxies for production**
+5. **Implement proper error handling**
+6. **Monitor for security checkpoints**
+7. **Keep cookies fresh (re-login every 25 days)**
+
+## Troubleshooting
+
+### Login Issues
+
+- Check credentials in `.env`
+- Delete old cookies: `rm cookies/*.json`
+- Disable headless mode: `HEADLESS=false`
+- Check for security checkpoints
+
+### Rate Limiting
+
+- Reduce action frequency
+- Use multiple accounts
+- Implement longer delays
+
+### Selector Failures
+
+- Facebook UI changes frequently
+- Check logs for failed selectors
+- Update selectors in code
+- Use GraphQL interception when possible
+
+## Development
 
 ```bash
-# Run core component tests
-python test_core_components.py
+# Run tests
+python3 tests/test_core_infrastructure.py
 
-# Run login test
-python test_real_login.py
+# Start with debug logging
+DEBUG=true python3 -m src.api.main
+
+# Check API health
+curl http://localhost:8000/health
 ```
 
-## Security Notes
+## API Health Check
 
-- Never commit `.env` file with credentials
-- Use test accounts for development
-- Be aware of Facebook's Terms of Service
-- Rate limits are conservative but not guaranteed safe
-- Account restrictions are possible with any automation
+```bash
+GET /health
 
-## Technical Issues
+Response:
+{
+  "status": "ok",
+  "browser_ready": true
+}
+```
 
-### Facebook Detection
-Facebook actively detects and blocks automation. This API includes:
-- Anti-detection measures (custom user agent, webdriver flag hiding)
-- Conservative rate limiting
-- Human-like behavior patterns
-- Preflight checks to prevent risky actions
+## Limitations
 
-### Common Problems
-1. **Login failures**: Cookie dialog blocking - handled automatically
-2. **Selector changes**: Automatic fallback and discovery
-3. **Rate limiting**: Preflight checker blocks excessive actions
-4. **Account restrictions**: Use test accounts, follow rate limits
+- **Login Required**: Most features require authentication
+- **Privacy Settings**: Can only access public data or data visible to logged-in user
+- **Rate Limits**: Facebook enforces strict rate limits
+- **UI Changes**: Facebook frequently changes UI, requiring selector updates
+- **GraphQL Restrictions**: Profile data limited for logged-out users
+
+## Contributing
+
+1. Fork the repository
+2. Create feature branch
+3. Make changes
+4. Add tests
+5. Submit pull request
 
 ## License
 
-MIT
+MIT License
 
 ## Disclaimer
 
-This tool is for educational purposes. Automating Facebook violates their Terms of Service and may result in account restrictions or bans. Use at your own risk with test accounts only.
+This tool is for educational purposes only. Use responsibly and in accordance with Facebook's Terms of Service. The authors are not responsible for any misuse or violations.
+
+## Support
+
+For issues and questions:
+- Check documentation
+- Review logs in `/tmp/facebook-api.log`
+- Check GraphQL responses in `/tmp/fb_profile_graphql.json`
+- Open an issue on GitHub
+
+## Changelog
+
+### v1.0.0 (2026-01-26)
+- Initial release
+- Multi-account support
+- Complete Facebook automation API
+- GraphQL interception
+- Rate limiting and caching
+- Queue management
+- Events, Pages, Marketplace, Stories support
