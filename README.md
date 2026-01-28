@@ -4,68 +4,52 @@ A comprehensive REST API for automating Facebook interactions using Playwright. 
 
 ## ⚠️ How Facebook Renders Posts
 
-### The Rendering Mechanism
+### Current Implementation: DOM Extraction ✅
 
-Facebook uses **client-side JavaScript rendering** with **GraphQL API calls**:
+The scraper uses **DOM extraction during scrolling** which is the most reliable method:
 
-1. **Initial HTML Load**: Minimal HTML with page structure
-   - Contains navigation, header, but **no post content**
-   - Includes session tokens (`fb_dtsg`, `lsd`) in the HTML
+**Why it works:**
+- Extracts from rendered HTML that browser displays
+- Handles Facebook's virtual scrolling (posts added/removed dynamically)
+- Gets 10-16 posts per profile (typical for timeline view)
+- Filters out comments using link analysis (`comment_id` detection)
 
-2. **GraphQL API Requests**: JavaScript makes POST requests to `/api/graphql/`
-   ```
-   POST https://www.facebook.com/api/graphql/
-   
-   Parameters:
-   - fb_dtsg: NAfvScOYsQLzCdKX5aAd3go8WvMQiaq1LRz6ptJpGn-V40LPdNBc-tw:2:1769418649
-   - doc_id: 25044355701909548
-   - variables: {"count":15,"environment":"MAIN_SURFACE","scale":1}
-   ```
-
-3. **Data Format**: **Not encrypted** - uses URL-encoded form data
-   - `fb_dtsg`: CSRF token (extracted from page HTML)
-   - `doc_id`: GraphQL query identifier
-   - `variables`: JSON parameters (URL-encoded)
-   - Response: JSON with post data
-
-4. **DOM Rendering**: JavaScript creates `[role="article"]` elements
-   - Parses JSON response
-   - Creates DOM elements dynamically
-   - Inserts into page structure
-
-5. **Virtual Scrolling**: Loads/removes posts dynamically
-   - ~28 GraphQL requests per scroll session
-   - Adds new posts, removes old ones from DOM
-   - Article count fluctuates: 2→3→5→8→2
-
-### Why Traditional Scraping Fails
-
-❌ **Viewing page source** - No posts in initial HTML
-❌ **Extracting after scrolling** - Virtual scrolling removes old posts
-❌ **JSON extraction** - No `<script type="application/json">` tags
-❌ **Direct API calls** - Requires valid `fb_dtsg` token from authenticated session
-
-### What Works ✅
-
-**Scroll-and-Extract Pattern** (current implementation):
-```python
-for i in range(30):
-    # Extract posts from live DOM DURING scroll
-    articles = await page.query_selector_all('[role="article"]')
-    for article in articles:
-        text_elements = await article.query_selector_all('[dir="auto"]')
-        # Extract text from rendered DOM
-    
-    # Then scroll to trigger more GraphQL requests
-    await page.evaluate('window.scrollBy(0, 300)')
-    await asyncio.sleep(1.5)
+**Typical Results:**
+```bash
+$ python test_friend_posts.py
+Total posts: 10
+1. A lovely new year's day...
+2. Great pic love Santa...
+3. Wonder what three sons do for you...
 ```
 
-**Alternative: GraphQL Interception** (possible future optimization):
-- Intercept GraphQL responses during page load
-- Parse JSON directly instead of DOM extraction
-- Requires maintaining valid session tokens
-- Would be faster but more brittle (API changes)
+### Why You Can't Get "All" Posts
+
+Facebook's profile timeline is **intentionally limited**:
+
+1. **Virtual Scrolling**: Only loads ~20 posts max, removes old ones
+2. **Privacy Design**: Full post history requires Graph API access
+3. **Timeline vs Archive**: Timeline shows recent activity, not complete history
+4. **Rate Limiting**: Aggressive scrolling triggers anti-bot detection
+
+### Alternative: GraphQL API (Not Recommended)
+
+Facebook uses GraphQL (`POST /api/graphql/`) but:
+
+❌ **Timeline queries not exposed** - Profile page doesn't trigger post-loading GraphQL
+❌ **Requires authentication tokens** - `fb_dtsg` from session
+❌ **API changes frequently** - `doc_id` values change with updates
+❌ **Anti-bot detection** - Direct API calls get blocked
+
+**GraphQL Request Example:**
+```
+POST https://www.facebook.com/api/graphql/
+fb_dtsg=NAfvScOYsQLzCdKX5aAd3go8WvMQiaq1LRz6ptJpGn-V40LPdNBc-tw:2:1769418649
+doc_id=25044355701909548
+variables={"count":15,"environment":"MAIN_SURFACE"}
+```
+
+The data is URL-encoded form data (not encrypted), but the profile timeline doesn't use GraphQL for post loading - posts are embedded in initial page load and rendered by JavaScript.
 
 ### Performance Metrics
 - Initial load: 2 articles
