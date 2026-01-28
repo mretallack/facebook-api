@@ -2,6 +2,71 @@
 
 A comprehensive REST API for automating Facebook interactions using Playwright. Supports posts, friends, groups, messages, events, pages, marketplace, and stories.
 
+## Investigation: Finding Post IDs from Friends Feed
+
+### Attempted Approach: Friends Feed Scraping
+
+**Goal**: Extract post IDs from friends feed (`/?sk=h_chr`) to enable direct post access.
+
+**Test Results**:
+```bash
+$ python test_friends_feed_deep.py
+
+Loading friends feed (/?sk=h_chr)...
+Page title: (1) Facebook
+✗ Feed container not found
+Scroll 0-15: 0 articles
+Total articles: 0
+```
+
+**Finding**: Friends feed does NOT load articles via standard scraping.
+
+### Network Traffic Analysis
+
+**GraphQL Requests Captured**: 14 responses
+- Notification data: ✓
+- User settings: ✓
+- Feed/story data: ✗
+
+**Post IDs Found**: 0 (only user ID: 61586881541300)
+
+**Evidence**:
+```json
+{
+  "data": {
+    "viewer": {
+      "id": "61586881541300",
+      "notifications": [...]
+    }
+  }
+}
+```
+
+### Why Friends Feed Doesn't Work
+
+1. **No Article Elements**: `[role="article"]` selector returns 0 results
+2. **No Feed Container**: `[role="feed"]` not found on page
+3. **GraphQL Doesn't Return Posts**: Captured responses contain notifications/settings, not feed data
+4. **Possible Reasons**:
+   - Friends feed requires JavaScript interaction (click/hover)
+   - Feed loads via different mechanism (WebSocket, long-polling)
+   - Privacy settings block programmatic access
+   - Facebook detects headless browser
+
+### Alternative Discovery: Main Feed Analysis
+
+**Main Feed** (`/`) shows 2 articles but:
+- No post URLs in article links
+- No author information
+- No post text
+- Likely placeholder/loading elements
+
+**Screenshot Evidence**:
+- Main feed: 672KB (has some content)
+- Friends feed: Similar size but 0 articles
+
+---
+
 ## ⚠️ CRITICAL FINDING: Profile Timelines Show Comments, Not Posts
 
 ### Evidence-Based Discovery
@@ -51,11 +116,39 @@ https://www.facebook.com/permalink.php?story_fbid=POST_ID&id=USER_ID
 - Posts tab is privacy-restricted
 - Need alternative method to discover post IDs
 
-**Possible Solutions**:
+**Possible Solutions** (Tested):
 1. **News Feed Scraping** - Extract post IDs from your own feed
-2. **Notification Scraping** - Get post IDs from notifications
-3. **Graph API** - Use official API to get post IDs
-4. **Historical Database** - Build database of post IDs over time
+   - **Status**: ❌ Tested - Main feed shows 2 articles with no post URLs
+   - **Issue**: Feed doesn't load properly via Playwright
+   
+2. **Friends Feed** (`/?sk=h_chr`) - Chronological feed of friends' posts
+   - **Status**: ❌ Tested - Returns 0 articles
+   - **Issue**: Feed container not found, no articles load
+   
+3. **Notification Scraping** - Get post IDs from notifications
+   - **Status**: ⏳ Not tested yet
+   - **Potential**: Notifications may contain post references
+   
+4. **Graph API** - Use official API to get post IDs
+   - **Status**: ✅ Works but requires app approval + OAuth
+   - **Limitation**: Rate limited, requires user permissions
+   
+5. **Browser Extension** - Run in real browser with extension
+   - **Status**: ⏳ Not tested
+   - **Potential**: Could capture post IDs as user browses
+   
+6. **Historical Database** - Build database over time
+   - **Status**: ⏳ Requires initial post ID source
+   - **Limitation**: Doesn't solve discovery problem
+
+**Current Blocker**: Cannot reliably extract post IDs from any Facebook page via Playwright:
+- Profile timelines: Show comments, not posts
+- Posts tab: Privacy restricted (0 articles)
+- Main feed: Articles load but contain no post URLs
+- Friends feed: No articles load at all (0 results)
+- GraphQL responses: Contain notifications/settings, not feed data
+
+**Root Cause**: Facebook's feed loading may require real browser interaction or uses mechanisms incompatible with headless scraping.
 
 ### Why This Happens
 
