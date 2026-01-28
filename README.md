@@ -6,57 +6,66 @@ A comprehensive REST API for automating Facebook interactions using Playwright. 
 
 ### The Rendering Mechanism
 
-Facebook uses **client-side JavaScript rendering** to display posts. Here's how it works:
+Facebook uses **client-side JavaScript rendering** with **GraphQL API calls**:
 
-1. **Initial HTML Load**: When you navigate to a profile, Facebook sends minimal HTML
-   - Contains page structure, navigation, header
-   - **Does NOT contain post content** in the initial HTML
+1. **Initial HTML Load**: Minimal HTML with page structure
+   - Contains navigation, header, but **no post content**
+   - Includes session tokens (`fb_dtsg`, `lsd`) in the HTML
 
-2. **JavaScript Execution**: After page load, JavaScript makes GraphQL requests
-   - Fetches post data from Facebook's API
-   - Dynamically creates DOM elements for posts
-   - Inserts `[role="article"]` elements into the page
+2. **GraphQL API Requests**: JavaScript makes POST requests to `/api/graphql/`
+   ```
+   POST https://www.facebook.com/api/graphql/
+   
+   Parameters:
+   - fb_dtsg: NAfvScOYsQLzCdKX5aAd3go8WvMQiaq1LRz6ptJpGn-V40LPdNBc-tw:2:1769418649
+   - doc_id: 25044355701909548
+   - variables: {"count":15,"environment":"MAIN_SURFACE","scale":1}
+   ```
 
-3. **Virtual Scrolling**: As you scroll, Facebook:
-   - Loads new posts via GraphQL (~28 requests per session)
-   - Adds new `[role="article"]` elements to DOM
-   - **Removes old articles** from DOM to save memory
-   - Article count fluctuates: 2→3→5→8→2 (old posts removed)
+3. **Data Format**: **Not encrypted** - uses URL-encoded form data
+   - `fb_dtsg`: CSRF token (extracted from page HTML)
+   - `doc_id`: GraphQL query identifier
+   - `variables`: JSON parameters (URL-encoded)
+   - Response: JSON with post data
 
-4. **Text Content**: Post text is rendered as:
-   - `<div dir="auto">` elements containing the actual text
-   - Text is **only in the DOM**, not in the initial HTML source
-   - Must extract from live DOM, not from `page.content()`
+4. **DOM Rendering**: JavaScript creates `[role="article"]` elements
+   - Parses JSON response
+   - Creates DOM elements dynamically
+   - Inserts into page structure
+
+5. **Virtual Scrolling**: Loads/removes posts dynamically
+   - ~28 GraphQL requests per scroll session
+   - Adds new posts, removes old ones from DOM
+   - Article count fluctuates: 2→3→5→8→2
 
 ### Why Traditional Scraping Fails
 
-❌ **Viewing page source** - Shows empty structure, no posts
-❌ **Extracting after scrolling** - Old posts removed by virtual scrolling
-❌ **JSON extraction** - Facebook no longer uses `<script type="application/json">` tags
-❌ **Profile timeline** - Shows comments/activity, not actual posts
+❌ **Viewing page source** - No posts in initial HTML
+❌ **Extracting after scrolling** - Virtual scrolling removes old posts
+❌ **JSON extraction** - No `<script type="application/json">` tags
+❌ **Direct API calls** - Requires valid `fb_dtsg` token from authenticated session
 
 ### What Works ✅
 
-**Scroll-and-Extract Pattern**:
+**Scroll-and-Extract Pattern** (current implementation):
 ```python
 for i in range(30):
-    # Extract posts DURING scroll
+    # Extract posts from live DOM DURING scroll
     articles = await page.query_selector_all('[role="article"]')
     for article in articles:
         text_elements = await article.query_selector_all('[dir="auto"]')
-        # Extract text from live DOM
+        # Extract text from rendered DOM
     
-    # Then scroll
+    # Then scroll to trigger more GraphQL requests
     await page.evaluate('window.scrollBy(0, 300)')
     await asyncio.sleep(1.5)
 ```
 
-**Key Techniques**:
-- Extract from **live DOM** during scrolling
-- Use `[role="article"]` selector for posts
-- Use `[dir="auto"]` selector for text content
-- Session keep-alive (refresh every 3-5 minutes)
-- Detect comments vs posts via `comment_id` in links
+**Alternative: GraphQL Interception** (possible future optimization):
+- Intercept GraphQL responses during page load
+- Parse JSON directly instead of DOM extraction
+- Requires maintaining valid session tokens
+- Would be faster but more brittle (API changes)
 
 ### Performance Metrics
 - Initial load: 2 articles
