@@ -190,30 +190,60 @@ class FriendsService(ActionHandler):
         return await self.execute('block_user', _block)
     
     async def get_friends_list(self, limit: int = 50) -> Dict:
-        """Get list of friends."""
+        """Get list of friends from JSON data."""
         async def _get_friends():
             await self.safe_navigate('https://www.facebook.com/me/friends')
+            await self.page.wait_for_timeout(3000)
             
+            html = await self.page.content()
+            
+            # Extract friends from JSON using Python
+            import json
+            import re
             friends = []
-            for _ in range(limit // 20):
-                batch = await self.page.evaluate("""
-                    () => {
-                        const cards = document.querySelectorAll('[data-testid="friend_list_item"], a[href*="/friends"]');
-                        return Array.from(cards).slice(0, 20).map(card => {
-                            const name = card.querySelector('span')?.textContent;
-                            const link = card.href || card.querySelector('a')?.href;
-                            return name && link ? {name, url: link} : null;
-                        }).filter(f => f);
-                    }
-                """)
-                friends.extend(batch)
-                
-                if len(friends) >= limit:
-                    break
-                
-                await self.scroll_slowly(300)
-                await self.page.wait_for_timeout(1000)
+            
+            # Find all JSON script tags
+            json_pattern = r'<script type="application/json"[^>]*>(.*?)</script>'
+            matches = re.findall(json_pattern, html, re.DOTALL)
+            
+            for match in matches:
+                try:
+                    data = json.loads(match)
+                    # Recursively search for friend data
+                    self._extract_friends_recursive(data, friends)
+                except:
+                    continue
             
             return friends[:limit]
         
         return await self.execute('friends_list', _get_friends)
+    
+    def _extract_friends_recursive(self, obj, friends, depth=0):
+        """Recursively extract friend data from nested JSON"""
+        if depth > 25 or not isinstance(obj, (dict, list)):
+            return
+        
+        if isinstance(obj, dict):
+            # Check if this is a friend item node
+            if 'title' in obj and 'url' in obj:
+                if isinstance(obj['title'], dict) and 'text' in obj['title']:
+                    if isinstance(obj['url'], str) and 'facebook.com' in obj['url']:
+                        name = obj['title']['text']
+                        url = obj['url']
+                        friend_id = obj.get('node', {}).get('id', url.split('/')[-1])
+                        profile_pic = obj.get('image_v2', {}).get('uri', '')
+                        if not any(f['url'] == url for f in friends):
+                            friends.append({
+                                'name': name,
+                                'url': url,
+                                'id': friend_id,
+                                'profile_picture': profile_pic
+                            })
+            
+            # Recurse into dict values
+            for value in obj.values():
+                self._extract_friends_recursive(value, friends, depth + 1)
+        
+        elif isinstance(obj, list):
+            for item in obj:
+                self._extract_friends_recursive(item, friends, depth + 1)

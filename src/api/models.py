@@ -37,6 +37,28 @@ class HealthResponse(BaseModel):
     status: str
     browser_ready: bool
 
+class Person(BaseModel):
+    id: str
+    name: str
+    profile_url: str
+    profile_picture: str
+    mutual_friends: int
+    location: str
+    work: str
+
+class ProfileDetails(BaseModel):
+    name: Optional[str] = None
+    bio: Optional[str] = None
+    profile_picture: Optional[str] = None
+    cover_photo: Optional[str] = None
+    friends_count: Optional[str] = None
+    followers_count: Optional[str] = None
+    location: Optional[str] = None
+    work: Optional[str] = None
+    education: Optional[str] = None
+    relationship: Optional[str] = None
+    joined: Optional[str] = None
+
 # Profile models
 class ProfileData(BaseModel):
     name: Optional[str] = None
@@ -58,6 +80,7 @@ class FriendData(BaseModel):
     name: str
     url: str
     mutual_friends: Optional[int] = 0
+    profile_picture: Optional[str] = ""
 
 class FriendRequestData(BaseModel):
     profile_url: str

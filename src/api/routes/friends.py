@@ -1,7 +1,7 @@
 """
 Friends API routes.
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from typing import List
 from ..models import FriendData, FriendRequestData, FriendActionResponse
 import logging
@@ -11,12 +11,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/friends", tags=["friends"])
 
 friends_service = None
+cache_service = None
 
 
 def set_friends_service(service):
     """Set the friends service instance."""
     global friends_service
     friends_service = service
+
+
+def set_cache_service(service):
+    """Set the cache service instance."""
+    global cache_service
+    cache_service = service
 
 
 @router.get("/search", response_model=List[FriendData])
@@ -34,8 +41,18 @@ async def search_friends(q: str = Query(..., description="Search query"), limit:
 
 
 @router.get("/list", response_model=List[FriendData])
-async def get_friends_list(limit: int = 50):
+async def get_friends_list(response: Response, limit: int = 50, fresh: bool = Query(False)):
     """Get list of friends."""
+    
+    # Try cache first
+    if cache_service and not fresh:
+        cached_friends = cache_service.get_friends()
+        if cached_friends:
+            response.headers["X-Cache-Hit"] = "true"
+            return cached_friends[:limit]
+    
+    response.headers["X-Cache-Hit"] = "false"
+    
     if not friends_service:
         raise HTTPException(status_code=503, detail="Friends service not initialized")
     
@@ -48,6 +65,17 @@ async def get_friends_list(limit: int = 50):
 
 
 @router.get("/requests", response_model=List[FriendData])
+async def get_friend_requests(response: Response, fresh: bool = Query(False)):
+    """Get friend requests."""
+    
+    # Try cache first
+    if cache_service and not fresh:
+        cached_requests = cache_service.get_friend_requests()
+        if cached_requests:
+            response.headers["X-Cache-Hit"] = "true"
+            return cached_requests
+    
+    response.headers["X-Cache-Hit"] = "false"
 async def get_friend_requests():
     """Get pending friend requests."""
     if not friends_service:

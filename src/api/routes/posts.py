@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Response
 from typing import Optional, List
 from src.api.models import Post, CreatePostRequest, CommentRequest, ShareRequest, ReactionRequest, PostActionResponse
 from src.scraper.session_manager import SessionManager
 from src.scraper.post_extractor import PostExtractor
 from src.scraper.content_classifier import ContentClassifier
+from datetime import datetime
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 session_manager: SessionManager = None
 posts_service = None
+cache_service = None
 
 def set_session_manager(sm: SessionManager):
     global session_manager
@@ -17,15 +19,41 @@ def set_posts_service(service):
     global posts_service
     posts_service = service
 
+def set_cache_service(service):
+    global cache_service
+    cache_service = service
+
 @router.get("/feed", response_model=List[Post])
 async def get_posts(
+    response: Response,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     exclude_ads: bool = Query(False),
     exclude_suggested: bool = Query(False),
-    post_type: Optional[str] = Query(None)
+    post_type: Optional[str] = Query(None),
+    fresh: bool = Query(False)
 ):
-    """Extract posts from Facebook feed"""
+    """Extract posts from friends' feed"""
+    
+    # Try cache first if enabled and not requesting fresh data
+    if cache_service and not fresh:
+        # Get posts from both friend and following sources
+        cached_posts = cache_service.get_posts(limit * 2, source_type=None)
+        if cached_posts:
+            # Apply filtering
+            filtered = ContentClassifier.filter_posts(
+                cached_posts,
+                exclude_ads=exclude_ads,
+                exclude_suggested=exclude_suggested,
+                post_type=post_type
+            )
+            
+            response.headers["X-Cache-Hit"] = "true"
+            response.headers["X-Cache-Age"] = "0"
+            return filtered[offset:offset + limit]
+    
+    response.headers["X-Cache-Hit"] = "false"
+    
     if not session_manager or not session_manager.page:
         raise HTTPException(status_code=503, detail="Browser not initialized")
     
@@ -43,6 +71,28 @@ async def get_posts(
     
     # Apply pagination
     return filtered[offset:offset + limit]
+
+@router.get("/following", response_model=List[Post])
+async def get_following_posts(
+    response: Response,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    fresh: bool = Query(False)
+):
+    """Extract posts from following feed"""
+    
+    # Try cache first if enabled and not requesting fresh data
+    if cache_service and not fresh:
+        cached_posts = cache_service.get_posts(limit, source_type='following')
+        if cached_posts:
+            response.headers["X-Cache-Hit"] = "true"
+            response.headers["X-Cache-Age"] = "0"
+            return cached_posts[offset:offset + limit]
+    
+    response.headers["X-Cache-Hit"] = "false"
+    
+    # For now, return empty list since we don't have following scraper yet
+    return []
 
 @router.post("/create", response_model=PostActionResponse)
 async def create_post(request: CreatePostRequest):

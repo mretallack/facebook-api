@@ -1,7 +1,7 @@
 """
 Profile API routes.
 """
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Response
 from ..models import ProfileData, ProfileUpdateRequest, ProfilePictureResponse
 import logging
 
@@ -11,6 +11,7 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 
 # Global service instance (will be set by main app)
 profile_service = None
+cache_service = None
 
 
 def set_profile_service(service):
@@ -19,9 +20,25 @@ def set_profile_service(service):
     profile_service = service
 
 
+def set_cache_service(service):
+    """Set the cache service instance."""
+    global cache_service
+    cache_service = service
+
+
 @router.get("/me", response_model=ProfileData)
-async def get_profile():
+async def get_profile(response: Response, fresh: bool = Query(False)):
     """Get current user's profile information."""
+    
+    # Try cache first
+    if cache_service and not fresh:
+        cached_profile = cache_service.get_profile()
+        if cached_profile:
+            response.headers["X-Cache-Hit"] = "true"
+            return cached_profile
+    
+    response.headers["X-Cache-Hit"] = "false"
+    
     if not profile_service:
         raise HTTPException(status_code=503, detail="Profile service not initialized")
     

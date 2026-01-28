@@ -5,7 +5,21 @@ This document details the technical findings and approaches for scraping Faceboo
 
 ## Key Findings
 
-### 1. Session Management
+### 1. Profile Timeline Content
+
+**What Profile Timelines Show**:
+- Mix of user's own posts AND comments on those posts
+- Each `[role="article"]` can be either a post or a comment
+- Comments have `comment_id` in their links
+- Posts have `/posts/` or `/permalink/` in their links
+- **Privacy restriction**: `/username/posts` tab is NOT accessible to friends (shows "content isn't available")
+
+**Detection Strategy**:
+- Articles with ONLY `comment_id` links = comments (skip these)
+- Articles with `/posts/` or `/permalink/` links = posts or post+comment (keep these)
+- Extract all content as it represents activity on the friend's timeline
+
+**Result**: Can extract 10-15 items per friend profile (mix of posts and comments)
 **Problem**: Facebook sessions expire aggressively
 - Cookies expire after navigation or inactivity
 - Session lost after clicking cookie consent

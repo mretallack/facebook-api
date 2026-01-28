@@ -4,7 +4,7 @@ All Facebook actions should inherit from this class.
 """
 import asyncio
 import random
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Dict
 from datetime import datetime
 import logging
 
@@ -28,7 +28,7 @@ class ActionHandler:
         *args,
         account_age_days: Optional[int] = None,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute an action with preflight checks, retries, and error handling.
         
