@@ -2,6 +2,89 @@
 
 A comprehensive REST API for automating Facebook interactions using Playwright. Supports posts, friends, groups, messages, events, pages, marketplace, and stories.
 
+## 🎉 BREAKTHROUGH: Post IDs Found in GraphQL Responses!
+
+### Discovery: Feed Data IS Transferred
+
+**Method**: Captured complete network traffic using Playwright's HAR recording.
+
+**Result**: Post IDs are embedded in GraphQL responses!
+
+```bash
+$ python capture_network_traffic.py
+
+Total network requests: 242
+GraphQL responses: 4
+  - Response 3: 1.3MB (contains feed data!)
+  - Response 4: 1.7MB (contains feed data!)
+
+Extracted post IDs: 10 unique posts
+  919057467321537
+  1252780596896900
+  1638338720899003
+  1380220754146433
+  1657091483129181
+```
+
+### How It Works
+
+1. **GraphQL Response Structure**:
+```json
+{
+  "data": {
+    "viewer": {
+      "news_feed": {
+        "edges": [{
+          "node": {
+            "post_id": "919057467321537",
+            "id": "UzpfSTkxOTA1NzQ2NzMyMTUzNw==",
+            "comet_sections": {...}
+          }
+        }]
+      }
+    }
+  }
+}
+```
+
+2. **Data is NOT encrypted** - Plain JSON in GraphQL responses
+3. **Multiple posts per response** - Each scroll triggers new GraphQL request
+4. **Post IDs are numeric** - Can be used in permalink URLs
+
+### Accessing Posts with Extracted IDs
+
+```python
+post_id = "919057467321537"
+url = f"https://www.facebook.com/permalink.php?story_fbid={post_id}"
+# This URL works! ✅
+```
+
+### Implementation Strategy
+
+**New Approach**: GraphQL Response Interception
+1. Load feed page
+2. Intercept GraphQL responses
+3. Parse JSON to extract `post_id` fields
+4. Build post URLs from IDs
+5. Access posts directly
+
+**Advantages**:
+- ✅ Gets actual post IDs (not comments)
+- ✅ Works with main feed
+- ✅ No DOM parsing needed
+- ✅ More reliable than scraping rendered HTML
+
+**Code Example**:
+```python
+async def handle_response(response):
+    if 'graphql' in response.url:
+        data = await response.json()
+        # Extract post_id from nested structure
+        post_ids = extract_post_ids(data)
+```
+
+---
+
 ## Investigation: Finding Post IDs from Friends Feed
 
 ### Attempted Approach: Friends Feed Scraping
