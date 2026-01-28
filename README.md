@@ -2,7 +2,46 @@
 
 A comprehensive REST API for automating Facebook interactions using Playwright. Supports posts, friends, groups, messages, events, pages, marketplace, and stories.
 
-## ⚠️ Technical Deep Dive: How Facebook Renders Posts
+## ⚠️ CRITICAL FINDING: Profile Timelines Show Comments, Not Posts
+
+### Evidence-Based Discovery
+
+**What the scraper actually extracts**: Comments that the user made on other people's posts, NOT the user's own posts.
+
+**Proof**:
+```bash
+$ python test_different_urls.py
+
+Main profile (https://www.facebook.com/mark.retallack):
+  Articles found: 3
+  Has comment_id: True  ← This indicates a COMMENT
+  Has post link: True   ← Link to the post being commented on
+  Text: "Chris Retallack..."  ← Comment text
+
+Posts tab (https://www.facebook.com/mark.retallack/posts):
+  Articles found: 0  ← Privacy restricted, returns empty
+```
+
+**Screenshot Evidence**:
+- Main profile: 1.2MB (shows comments)
+- Posts tab: 50KB (empty/blocked)
+
+### Why This Happens
+
+Facebook's profile timeline (`/username`) shows **recent activity**:
+- ✅ Comments the user made
+- ✅ Posts the user was tagged in
+- ✅ Reactions the user made
+- ❌ NOT the user's own posts
+
+To see actual posts, you need:
+1. **Posts tab** (`/username/posts`) - **Privacy blocked** for friends
+2. **Graph API** - Requires app approval + user OAuth consent
+3. **Direct post URLs** - Need to know the post IDs already
+
+---
+
+## Technical Deep Dive: How Facebook Renders Posts
 
 ### Executive Summary
 
@@ -244,6 +283,49 @@ if has_comment_id and not has_post_link:
 ---
 
 ## Recommendations
+
+### For Getting Actual Posts (Not Comments)
+
+**The Reality**: You cannot scrape a friend's actual posts from their profile.
+
+**Why**:
+1. Profile timeline shows comments/activity, not posts
+2. Posts tab (`/username/posts`) is privacy-restricted
+3. Facebook intentionally blocks this for privacy
+
+**Alternatives**:
+1. **Official Graph API**
+   - Requires Facebook app approval
+   - User must grant OAuth permissions
+   - Rate limited to 200 calls/hour
+   - Only returns posts user has permission to see
+
+2. **News Feed Scraping**
+   - Scrape your own news feed (`/`)
+   - Will show friends' posts that appear in your feed
+   - Limited to what Facebook's algorithm shows you
+
+3. **Group Posts**
+   - If user posts in public groups
+   - Scrape the group, not the profile
+
+4. **Page Posts**
+   - If user has a public Page
+   - Pages are scrapable (not privacy-restricted)
+
+### For Current Implementation (Comments)
+
+The current scraper successfully extracts:
+- ✅ Comments user made on posts
+- ✅ 10-16 comments per profile
+- ✅ Filters out nested replies
+- ✅ Session keep-alive prevents expiration
+
+If you need actual posts, you must use Facebook's official Graph API with proper permissions.
+
+---
+
+## Recommendations (Original)
 
 ### For Maximum Post Coverage
 1. **Use official Graph API** - Requires app approval and user consent
