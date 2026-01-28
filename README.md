@@ -26,6 +26,37 @@ Posts tab (https://www.facebook.com/mark.retallack/posts):
 - Main profile: 1.2MB (shows comments)
 - Posts tab: 50KB (empty/blocked)
 
+### ✅ Direct Post Access WORKS (If You Have the Post ID)
+
+**Discovery**: You CAN access individual posts directly if you know the post ID:
+
+```bash
+$ python test_direct_post_access.py
+
+Testing: https://www.facebook.com/photo/?fbid=10160189910976167&set=a.10153685248131167
+✓ Page contains 'Mark Retallack'
+✓ Image viewer found
+✓ Content accessible
+```
+
+**Post URL Formats That Work**:
+```
+https://www.facebook.com/photo/?fbid=POST_ID&set=ALBUM_ID
+https://www.facebook.com/USERNAME/posts/POST_ID
+https://www.facebook.com/permalink.php?story_fbid=POST_ID&id=USER_ID
+```
+
+**The Challenge**: Finding post IDs without scraping the profile
+- Profile timeline doesn't show post links (only comments)
+- Posts tab is privacy-restricted
+- Need alternative method to discover post IDs
+
+**Possible Solutions**:
+1. **News Feed Scraping** - Extract post IDs from your own feed
+2. **Notification Scraping** - Get post IDs from notifications
+3. **Graph API** - Use official API to get post IDs
+4. **Historical Database** - Build database of post IDs over time
+
 ### Why This Happens
 
 Facebook's profile timeline (`/username`) shows **recent activity**:
@@ -35,9 +66,10 @@ Facebook's profile timeline (`/username`) shows **recent activity**:
 - ❌ NOT the user's own posts
 
 To see actual posts, you need:
-1. **Posts tab** (`/username/posts`) - **Privacy blocked** for friends
-2. **Graph API** - Requires app approval + user OAuth consent
-3. **Direct post URLs** - Need to know the post IDs already
+1. **Direct post URL** - **Works if you have the post ID** ✅
+2. **Posts tab** (`/username/posts`) - **Privacy blocked** for friends ❌
+3. **Graph API** - Requires app approval + user OAuth consent
+4. **News Feed** - Shows posts that appear in your feed
 
 ---
 
