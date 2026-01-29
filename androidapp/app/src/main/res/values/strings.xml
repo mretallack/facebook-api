@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Facebook Client</string>
+    <string name="login">Login</string>
+    <string name="email">Email</string>
+    <string name="password">Password</string>
+    <string name="api_url">API Server URL</string>
+    <string name="feed">Feed</string>
+    <string name="friends">Friends</string>
+    <string name="messages">Messages</string>
+    <string name="profile">Profile</string>
+    <string name="create_post">Create Post</string>
+    <string name="post">Post</string>
+    <string name="like">Like</string>
+    <string name="comment">Comment</string>
+    <string name="share">Share</string>
+    <string name="search">Search</string>
+    <string name="add_friend">Add Friend</string>
+    <string name="send">Send</string>
+</resources>

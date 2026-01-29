@@ -14,7 +14,7 @@ class FeedAggregator:
     def __init__(self, page: Page, session_manager=None):
         self.page = page
         self.session_manager = session_manager
-        self.post_urls = set()
+        self.post_urls = []  # Changed from set to list to preserve order
     
     @retry_on_session_loss(max_retries=2)
     async def get_feed(self, friends: List[Dict], following: List[Dict], limit: int = 20, include_own_profile: bool = True) -> List[Dict]:
@@ -160,7 +160,22 @@ class FeedAggregator:
         await self.page.goto(friend['url'], wait_until='networkidle')
         await asyncio.sleep(3)
         
-        # Scroll to trigger GraphQL requests
+        # FIRST: Extract posts from initial DOM
+        dom_links = await self.page.query_selector_all('a[href*="/posts/"], a[href*="/photo/"]')
+        for link in dom_links:
+            href = await link.get_attribute('href')
+            if href:
+                # Make absolute URL
+                if href.startswith('/'):
+                    href = f"https://www.facebook.com{href}"
+                # Apply same filters
+                if 'comment_id=' not in href and 'reply_comment_id=' not in href:
+                    if 'set=gm.' not in href:
+                        if '/posts/' in href or ('/photo/' in href and 'set=a.' in href):
+                            if href not in self.post_urls:
+                                self.post_urls.append(href)
+        
+        # SECOND: Scroll to trigger GraphQL requests for older posts
         for _ in range(15):  # Increased from 10 to 15 for more posts
             await self.page.evaluate('window.scrollBy(0, document.body.scrollHeight)')
             await asyncio.sleep(2)
@@ -170,7 +185,15 @@ class FeedAggregator:
         
         # Fetch posts from collected URLs (limit to 6 per friend)
         posts = []
-        for url in list(self.post_urls)[:6]:  # Increased from 10 to 6
+        unique_urls = []
+        for url in self.post_urls:
+            if url not in unique_urls:
+                unique_urls.append(url)
+        
+        # Filter to only photo posts
+        photo_urls = [url for url in unique_urls if '/photo/' in url]
+        
+        for url in photo_urls[:6]:  # Limit to 6 photos
             try:
                 logger.info(f"[DEBUG] Fetching post: {url}")
                 content = await self._fetch_post(url)
@@ -180,7 +203,7 @@ class FeedAggregator:
                         'author': {'name': friend['name'], 'profile_url': friend['url']},
                         'content': content['text'],
                         'url': url,
-                        'timestamp': '',
+                        'timestamp': content.get('timestamp', ''),
                         'image_url': content.get('image')
                     })
                     logger.info(f"[DEBUG] ✓ Fetched post successfully")
@@ -204,7 +227,8 @@ class FeedAggregator:
                         continue
                     # Only include profile posts and photos
                     if '/posts/' in value or ('/photo/' in value and 'set=a.' in value):
-                        self.post_urls.add(value)
+                        if value not in self.post_urls:  # Avoid duplicates while preserving order
+                            self.post_urls.append(value)
                 elif isinstance(value, (dict, list)):
                     self._extract_urls(value)
         elif isinstance(data, list):
@@ -217,23 +241,56 @@ class FeedAggregator:
             await self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
             await asyncio.sleep(2)
             
+            # Try to extract timestamp
+            timestamp = ""
+            try:
+                # Look for timestamp - try multiple selectors
+                time_elem = await self.page.query_selector('abbr[data-utime], abbr[data-shorten], span[id*="jsc"] abbr')
+                if not time_elem:
+                    # Try finding any abbr near the post
+                    time_elem = await self.page.query_selector('abbr')
+                
+                if time_elem:
+                    # Try data-utime attribute first (Unix timestamp)
+                    utime = await time_elem.get_attribute('data-utime')
+                    if utime:
+                        from datetime import datetime
+                        timestamp = datetime.fromtimestamp(int(utime)).strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        # Try title or text
+                        timestamp = await time_elem.get_attribute('title') or await time_elem.inner_text()
+            except:
+                pass
+            
             if '/photo/' in url:
                 text = await self.page.get_attribute('meta[name="description"]', 'content') or ""
                 main = await self.page.query_selector('[role="main"]')
                 img = await main.query_selector('img[src*="scontent"]') if main else None
                 image_url = await img.get_attribute('src') if img else None
-                return {'text': text, 'image': image_url}
+                return {'text': text, 'image': image_url, 'timestamp': timestamp}
             else:
+                # Text post - try multiple methods
                 article = await self.page.query_selector('[role="article"]')
                 if not article:
                     return None
+                
+                # Try specific text elements first
                 text_elems = await article.query_selector_all('[dir="auto"]')
                 texts = []
                 for elem in text_elems[:3]:
                     t = await elem.inner_text()
-                    if t.strip():
+                    if t.strip() and len(t.strip()) > 5:
                         texts.append(t.strip())
-                return {'text': '\n'.join(texts) if texts else ""}
+                
+                # If no text found, get all article text
+                if not texts:
+                    all_text = await article.inner_text()
+                    lines = [l.strip() for l in all_text.split('\n') if l.strip() and len(l.strip()) > 10]
+                    # Skip common UI elements
+                    filtered = [l for l in lines if not any(skip in l.lower() for skip in ['like', 'comment', 'share', 'send', 'more'])]
+                    texts = filtered[:3]
+                
+                return {'text': '\n'.join(texts) if texts else "", 'timestamp': timestamp}
         except Exception as e:
             logger.warning(f"Fetch error for {url}: {e}")
             return None

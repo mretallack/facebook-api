@@ -76,8 +76,7 @@ async def get_friend_requests(response: Response, fresh: bool = Query(False)):
             return cached_requests
     
     response.headers["X-Cache-Hit"] = "false"
-async def get_friend_requests():
-    """Get pending friend requests."""
+    
     if not friends_service:
         raise HTTPException(status_code=503, detail="Friends service not initialized")
     
@@ -86,7 +85,7 @@ async def get_friend_requests():
     if not result['success']:
         raise HTTPException(status_code=500, detail=result.get('error', 'Failed to get requests'))
     
-    return result['data']
+    return result.get('data', [])
 
 
 @router.post("/request", response_model=FriendActionResponse)
