@@ -237,22 +237,58 @@ class CacheService:
         finally:
             session.close()
     
+    def store_post(self, post_id: str, author_name: str, author_url: str, 
+                   content: str, url: str, timestamp: str = '', 
+                   image_url: str = None, source_type: str = 'friend',
+                   expiry_hours: int = 1):
+        """Store a single post in cache"""
+        session = self._get_session()
+        try:
+            # Check if post already exists
+            existing = session.query(CachedPost).filter_by(id=post_id).first()
+            if existing:
+                # Update existing
+                existing.content = content
+                existing.fetched_at = datetime.utcnow()
+                existing.expires_at = datetime.utcnow() + timedelta(hours=expiry_hours)
+            else:
+                # Create new
+                expires_at = datetime.utcnow() + timedelta(hours=expiry_hours)
+                cached_post = CachedPost(
+                    id=post_id,
+                    author_name=author_name,
+                    author_url=author_url,
+                    content=content,
+                    url=url,
+                    timestamp=timestamp or '',
+                    post_type='text',
+                    is_sponsored=False,
+                    is_suggested=False,
+                    source_type=source_type,
+                    likes=0,
+                    comments=0,
+                    shares=0,
+                    images=json.dumps([image_url] if image_url else []),
+                    videos=json.dumps([]),
+                    expires_at=expires_at,
+                    fetched_at=datetime.utcnow()
+                )
+                session.add(cached_post)
+            
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"[CacheService] Error storing post: {e}")
+        finally:
+            session.close()
+
     # Helper methods
     def _post_to_dict(self, post: CachedPost, base_url: str = None) -> Dict:
         import hashlib
         
-        # Convert image URLs to cached image URLs
+        # Get images from JSON
         images = json.loads(post.images) if post.images else []
-        
-        # Generate cache keys for images - use relative URLs if no base_url provided
-        cached_images = []
-        for img_url in images:
-            cache_key = hashlib.md5(img_url.encode()).hexdigest()
-            if base_url:
-                cached_images.append(f"{base_url}/media/image/{cache_key}")
-            else:
-                # Return relative URL - client will resolve against their base URL
-                cached_images.append(f"/media/image/{cache_key}")
+        image_url = images[0] if images else None
         
         return {
             'id': post.id,
@@ -261,20 +297,9 @@ class CacheService:
                 'profile_url': post.author_url
             },
             'content': post.content,
+            'url': post.url,
             'timestamp': post.timestamp,
-            'post_type': post.post_type,
-            'is_sponsored': post.is_sponsored,
-            'is_suggested': post.is_suggested,
-            'source_type': post.source_type,
-            'engagement': {
-                'likes': post.likes,
-                'comments': post.comments,
-                'shares': post.shares
-            },
-            'media': {
-                'images': cached_images,
-                'videos': json.loads(post.videos) if post.videos else []
-            }
+            'image_url': image_url
         }
     
     def _friend_to_dict(self, friend) -> Dict:

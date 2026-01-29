@@ -13,6 +13,7 @@ class CachedPost(Base):
     author_name = Column(String)
     author_url = Column(String)
     content = Column(Text)
+    url = Column(String)  # Post URL
     timestamp = Column(String)
     post_type = Column(String)
     is_sponsored = Column(Boolean)

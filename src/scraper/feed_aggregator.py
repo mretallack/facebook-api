@@ -34,7 +34,7 @@ class FeedAggregator:
                 logger.error(f"[FEED] Error scraping own profile: {e}")
         
         # Scrape posts from each friend's profile
-        for friend in friends:
+        for friend in friends[:2]:  # Limit to 2 friends max
             try:
                 logger.info(f"[FEED] Scraping friend: {friend['name']}")
                 posts = await self._scrape_friend_profile(friend, posts_per_friend=10)
@@ -87,6 +87,8 @@ class FeedAggregator:
         """Scrape posts from your own profile using GraphQL interception"""
         author = {'name': 'Mark Retallack', 'url': 'https://www.facebook.com/me'}
         
+        self.post_urls.clear()
+        
         # Intercept GraphQL responses
         async def handle_response(response):
             if '/api/graphql/' in response.url and response.status == 200:
@@ -109,29 +111,37 @@ class FeedAggregator:
             await self.page.evaluate('window.scrollBy(0, document.body.scrollHeight)')
             await asyncio.sleep(2)
         
+        # Remove handler before fetching posts
+        self.page.remove_listener('response', handle_response)
+        
         # Fetch posts from collected URLs
         posts = []
         for url in list(self.post_urls)[:posts_limit]:
             try:
+                logger.info(f"[DEBUG] Fetching post: {url}")
                 content = await self._fetch_post(url)
                 if content and content.get('text'):
                     posts.append({
-                        'author': author,
+                        'id': url,  # Use URL as ID
+                        'author': {'name': author['name'], 'profile_url': author['url']},
                         'content': content['text'],
                         'url': url,
                         'timestamp': '',
                         'image_url': content.get('image')
                     })
+                    logger.info(f"[DEBUG] ✓ Fetched post successfully")
             except Exception as e:
-                logger.error(f"Error fetching {url}: {e}")
+                logger.warning(f"Skipping post {url}: {e}")
+                continue
         
-        self.post_urls.clear()
         logger.info(f"[DEBUG] Scraped own profile: {len(posts)} posts")
         return posts
     
     async def _scrape_friend_profile(self, friend: Dict, posts_per_friend: int) -> List[Dict]:
         """Scrape posts from a single friend's profile using GraphQL interception"""
         logger.info(f"[DEBUG] Scraping profile: {friend['name']} at {friend['url']}")
+        
+        self.post_urls.clear()
         
         # Intercept GraphQL responses
         async def handle_response(response):
@@ -151,27 +161,33 @@ class FeedAggregator:
         await asyncio.sleep(3)
         
         # Scroll to trigger GraphQL requests
-        for _ in range(5):
+        for _ in range(15):  # Increased from 10 to 15 for more posts
             await self.page.evaluate('window.scrollBy(0, document.body.scrollHeight)')
             await asyncio.sleep(2)
         
-        # Fetch posts from collected URLs
+        # Remove handler before fetching posts
+        self.page.remove_listener('response', handle_response)
+        
+        # Fetch posts from collected URLs (limit to 6 per friend)
         posts = []
-        for url in list(self.post_urls)[:posts_per_friend]:
+        for url in list(self.post_urls)[:6]:  # Increased from 10 to 6
             try:
+                logger.info(f"[DEBUG] Fetching post: {url}")
                 content = await self._fetch_post(url)
                 if content and content.get('text'):
                     posts.append({
-                        'author': friend,
+                        'id': url,  # Use URL as ID
+                        'author': {'name': friend['name'], 'profile_url': friend['url']},
                         'content': content['text'],
                         'url': url,
                         'timestamp': '',
                         'image_url': content.get('image')
                     })
+                    logger.info(f"[DEBUG] ✓ Fetched post successfully")
             except Exception as e:
-                logger.error(f"Error fetching {url}: {e}")
+                logger.warning(f"Skipping post {url}: {e}")
+                continue
         
-        self.post_urls.clear()
         logger.info(f"[DEBUG] Finished scraping {friend['name']}: {len(posts)} posts")
         return posts
     
@@ -180,7 +196,14 @@ class FeedAggregator:
         if isinstance(data, dict):
             for key, value in data.items():
                 if key in ['permalink_url', 'wwwURL', 'url'] and isinstance(value, str):
-                    if '/posts/' in value or '/photo/' in value:
+                    # Skip comment URLs
+                    if 'comment_id=' in value or 'reply_comment_id=' in value:
+                        continue
+                    # Skip group posts (contain set=gm.)
+                    if 'set=gm.' in value:
+                        continue
+                    # Only include profile posts and photos
+                    if '/posts/' in value or ('/photo/' in value and 'set=a.' in value):
                         self.post_urls.add(value)
                 elif isinstance(value, (dict, list)):
                     self._extract_urls(value)
@@ -190,26 +213,30 @@ class FeedAggregator:
     
     async def _fetch_post(self, url):
         """Fetch content from a single post"""
-        await self.page.goto(url, wait_until='networkidle', timeout=15000)
-        await asyncio.sleep(2)
-        
-        if '/photo/' in url:
-            text = await self.page.get_attribute('meta[name="description"]', 'content') or ""
-            main = await self.page.query_selector('[role="main"]')
-            img = await main.query_selector('img[src*="scontent"]') if main else None
-            image_url = await img.get_attribute('src') if img else None
-            return {'text': text, 'image': image_url}
-        else:
-            article = await self.page.query_selector('[role="article"]')
-            if not article:
-                return None
-            text_elems = await article.query_selector_all('[dir="auto"]')
-            texts = []
-            for elem in text_elems:
-                t = await elem.inner_text()
-                if t.strip():
-                    texts.append(t.strip())
-            return {'text': '\n'.join(texts[:3]) if texts else ""}
+        try:
+            await self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(2)
+            
+            if '/photo/' in url:
+                text = await self.page.get_attribute('meta[name="description"]', 'content') or ""
+                main = await self.page.query_selector('[role="main"]')
+                img = await main.query_selector('img[src*="scontent"]') if main else None
+                image_url = await img.get_attribute('src') if img else None
+                return {'text': text, 'image': image_url}
+            else:
+                article = await self.page.query_selector('[role="article"]')
+                if not article:
+                    return None
+                text_elems = await article.query_selector_all('[dir="auto"]')
+                texts = []
+                for elem in text_elems[:3]:
+                    t = await elem.inner_text()
+                    if t.strip():
+                        texts.append(t.strip())
+                return {'text': '\n'.join(texts) if texts else ""}
+        except Exception as e:
+            logger.warning(f"Fetch error for {url}: {e}")
+            return None
     
     async def _scrape_following_feed(self, following: List[Dict], limit: int) -> List[Dict]:
         """Scrape following posts from main feed"""

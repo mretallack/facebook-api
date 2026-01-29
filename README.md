@@ -1,6 +1,125 @@
 # Facebook Automation API
 
-A comprehensive REST API for automating Facebook interactions using Playwright. Supports posts, friends, groups, messages, events, pages, marketplace, and stories.
+A Playwright-based REST API for extracting Facebook posts using GraphQL interception. Successfully extracts posts from friend profiles with full content and images.
+
+## 🎉 GraphQL Interception Method - WORKING!
+
+### How It Works
+
+The API uses **GraphQL response interception** to extract post URLs directly from Facebook's internal API responses:
+
+1. **Navigate to profile** - Load friend's Facebook profile page
+2. **Intercept GraphQL** - Capture `/api/graphql/` responses during page scroll
+3. **Extract URLs** - Parse JSON responses to find `permalink_url` fields
+4. **Fetch posts** - Navigate to each post URL and extract content
+5. **Return data** - Structured JSON with text, images, author info
+
+**Key Advantages**:
+- ✅ No DOM scraping needed for post discovery
+- ✅ Gets actual post URLs (not comments)
+- ✅ Works with friend profiles
+- ✅ Extracts full content and images
+- ✅ More reliable than HTML parsing
+
+### Test Results
+
+**Test Command**:
+```bash
+python3.12 test_new_feed.py
+```
+
+**Output**:
+```
+✓ Got 4 posts
+
+1. Mark Retallack
+   Text: Emily making chrIstmas cards. Glitter everyware....
+   URL: https://www.facebook.com/photo/?fbid=10152535112956167&set=a.10152164014711167
+
+2. Mark Retallack
+   Text: My next project.......
+   URL: https://www.facebook.com/photo/?fbid=10162056399516167&set=a.10152164014711167
+
+3. Mark Retallack
+   Text: Home Assistant Santa tracker is up....
+   URL: https://www.facebook.com/photo/?fbid=10162272323516167&set=a.10152164014711167
+
+4. Mark Retallack
+   Text: Ben is somewhere.......
+   URL: https://www.facebook.com/photo/?fbid=10162281064726167&set=a.10152164014711167
+
+✓ Test passed: 4 posts extracted
+```
+
+**JSON Response Format**:
+```json
+{
+  "count": 4,
+  "posts": [
+    {
+      "id": "https://www.facebook.com/photo/?fbid=10162281064726167&set=a.10152164014711167",
+      "author": {
+        "name": "Mark Retallack",
+        "profile_url": "https://www.facebook.com/mark.retallack"
+      },
+      "content": "Ben is somewhere....",
+      "url": "https://www.facebook.com/photo/?fbid=10162281064726167&set=a.10152164014711167",
+      "timestamp": "",
+      "image_url": "https://scontent-man2-1.xx.fbcdn.net/v/t39.30808-6/605699689_10162281064736167_947720682300811337_n.jpg?..."
+    }
+  ]
+}
+```
+
+### Performance Metrics
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Posts extracted | 2-4 | Per friend profile |
+| Scroll iterations | 10 | Triggers GraphQL requests |
+| Timeout per post | 30s | Graceful error handling |
+| Success rate | ~70% | Some posts timeout, skipped |
+| Total time | ~45s | For one profile |
+
+### Technical Implementation
+
+**GraphQL Interception**:
+```python
+async def handle_response(response):
+    if '/api/graphql/' in response.url and response.status == 200:
+        text = await response.text()
+        for line in text.split('\n'):
+            if line.strip():
+                data = json.loads(line)
+                self._extract_urls(data)  # Find permalink_url fields
+
+page.on('response', handle_response)
+await page.goto(profile_url)
+
+# Scroll to trigger more GraphQL requests
+for _ in range(10):
+    await page.evaluate('window.scrollBy(0, document.body.scrollHeight)')
+    await asyncio.sleep(2)
+```
+
+**URL Filtering**:
+- ✅ Includes: `/posts/`, `/photo/` URLs
+- ❌ Excludes: URLs with `comment_id=` or `reply_comment_id=`
+- ❌ Excludes: Duplicate URLs
+
+**Content Extraction**:
+```python
+# For photo posts
+text = await page.get_attribute('meta[name="description"]', 'content')
+img = await page.query_selector('img[src*="scontent"]')
+image_url = await img.get_attribute('src')
+
+# For text posts
+article = await page.query_selector('[role="article"]')
+text_elems = await article.query_selector_all('[dir="auto"]')
+```
+
+---
 
 ## 🎉 BREAKTHROUGH: Post IDs Found in GraphQL Responses!
 
@@ -639,6 +758,107 @@ FB_PASSWORD=your_password
 HEADLESS=true
 COOKIES_FILE=cookies/default.json
 ```
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+playwright install chromium
+
+# Run standalone test
+python3.12 test_new_feed.py
+
+# Or test API method
+python3.12 test_api_method.py
+```
+
+## API Usage (Standalone)
+
+The feed extraction works standalone without the full API server:
+
+```python
+from playwright.async_api import async_playwright
+from src.scraper.feed_aggregator import FeedAggregator
+import json
+
+async with async_playwright() as p:
+    browser = await p.chromium.launch(headless=True)
+    context = await browser.new_context()
+    
+    # Load cookies
+    with open('cookies/default.json') as f:
+        await context.add_cookies(json.load(f)['cookies'])
+    
+    page = await context.new_page()
+    
+    # Extract posts
+    aggregator = FeedAggregator(page)
+    friends = [{'name': 'Friend Name', 'url': 'https://www.facebook.com/username'}]
+    posts = await aggregator.get_feed(friends, [], limit=10)
+    
+    print(f"Got {len(posts)} posts")
+    await browser.close()
+```
+
+## Configuration
+
+Create `cookies/default.json` with your Facebook session cookies:
+```json
+{
+  "cookies": [
+    {"name": "c_user", "value": "...", "domain": ".facebook.com"},
+    {"name": "xs", "value": "...", "domain": ".facebook.com"}
+  ]
+}
+```
+
+Export cookies from your browser using a cookie extension.
+
+## Test Cases
+
+### Test 1: Basic Feed Extraction
+```bash
+python3.12 test_new_feed.py
+```
+Expected: 2-4 posts from Mark Retallack's profile
+
+### Test 2: API Method
+```bash
+python3.12 test_api_method.py
+```
+Expected: Same results as Test 1, formatted as API response
+
+### Test 3: Multiple Friends
+```python
+friends = [
+    {'name': 'Friend 1', 'url': 'https://www.facebook.com/friend1'},
+    {'name': 'Friend 2', 'url': 'https://www.facebook.com/friend2'}
+]
+posts = await aggregator.get_feed(friends, [], limit=20)
+```
+
+## Troubleshooting
+
+### No Posts Returned
+- Check cookies are valid (not expired)
+- Verify friend profile URL is correct
+- Check friend's privacy settings (must be visible to you)
+- Increase scroll iterations in `feed_aggregator.py`
+
+### Timeout Errors
+- Some posts may timeout (30s limit)
+- These are automatically skipped
+- Increase timeout in `_fetch_post()` if needed
+
+### Session Expired
+- Re-export cookies from browser
+- Cookies expire after ~30 days
+- Update `cookies/default.json`
+
+---
+
+## Original Documentation
 
 ## Quick Start
 

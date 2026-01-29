@@ -16,9 +16,8 @@ class SessionKeeper:
                     print(f"[{datetime.now()}] Session expired, re-authenticating...")
                     await self.session_manager.login()
                 else:
-                    # Navigate to feed to keep session active
-                    await self.session_manager.page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=10000)
-                    print(f"[{datetime.now()}] Session refreshed")
+                    # Just check cookies, don't navigate (prevents context destruction)
+                    print(f"[{datetime.now()}] Session active")
             except Exception as e:
                 print(f"[{datetime.now()}] Session keep-alive error: {e}")
             

@@ -1,10 +1,6 @@
-from fastapi import APIRouter, Query, HTTPException, Response
-from typing import Optional, List
-from src.api.models import Post, CreatePostRequest, CommentRequest, ShareRequest, ReactionRequest, PostActionResponse
+from fastapi import APIRouter, Query, HTTPException
 from src.scraper.session_manager import SessionManager
-from src.scraper.post_extractor import PostExtractor
-from src.scraper.content_classifier import ContentClassifier
-from datetime import datetime
+from src.scraper.feed_aggregator import FeedAggregator
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 session_manager: SessionManager = None
@@ -23,155 +19,108 @@ def set_cache_service(service):
     global cache_service
     cache_service = service
 
-@router.get("/feed", response_model=List[Post])
+@router.get("/feed")
 async def get_posts(
-    response: Response,
     limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    exclude_ads: bool = Query(False),
-    exclude_suggested: bool = Query(False),
-    post_type: Optional[str] = Query(None),
-    fresh: bool = Query(False)
+    friends: str = Query("", description="Comma-separated friend profile URLs"),
+    fresh: bool = Query(False, description="Force fresh scrape, bypass cache")
 ):
-    """Extract posts from friends' feed"""
-    
-    # Try cache first if enabled and not requesting fresh data
-    if cache_service and not fresh:
-        # Get posts from both friend and following sources
-        cached_posts = cache_service.get_posts(limit * 2, source_type=None)
-        if cached_posts:
-            # Apply filtering
-            filtered = ContentClassifier.filter_posts(
-                cached_posts,
-                exclude_ads=exclude_ads,
-                exclude_suggested=exclude_suggested,
-                post_type=post_type
-            )
-            
-            response.headers["X-Cache-Hit"] = "true"
-            response.headers["X-Cache-Age"] = "0"
-            return filtered[offset:offset + limit]
-    
-    response.headers["X-Cache-Hit"] = "false"
+    """Extract posts from friends using GraphQL interception with caching"""
     
     if not session_manager or not session_manager.page:
-        raise HTTPException(status_code=503, detail="Browser not initialized")
+        raise HTTPException(status_code=503, detail="Browser not ready")
     
-    # Extract posts
-    extractor = PostExtractor(session_manager.page)
-    posts = await extractor.extract_posts(limit + offset)
-    
-    # Filter posts
-    filtered = ContentClassifier.filter_posts(
-        posts,
-        exclude_ads=exclude_ads,
-        exclude_suggested=exclude_suggested,
-        post_type=post_type
-    )
-    
-    # Apply pagination
-    return filtered[offset:offset + limit]
-
-@router.get("/following", response_model=List[Post])
-async def get_following_posts(
-    response: Response,
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    fresh: bool = Query(False)
-):
-    """Extract posts from following feed"""
-    
-    # Try cache first if enabled and not requesting fresh data
+    # Try cache first unless fresh is requested
     if cache_service and not fresh:
-        cached_posts = cache_service.get_posts(limit, source_type='following')
-        if cached_posts:
-            response.headers["X-Cache-Hit"] = "true"
-            response.headers["X-Cache-Age"] = "0"
-            return cached_posts[offset:offset + limit]
+        cached = cache_service.get_posts(limit=limit)
+        if cached and len(cached) > 0:
+            return {
+                "count": len(cached),
+                "posts": cached,
+                "cached": True
+            }
     
-    response.headers["X-Cache-Hit"] = "false"
+    # Parse friends list
+    friend_list = []
+    if friends:
+        for url in friends.split(','):
+            url = url.strip()
+            if url:
+                name = url.split('/')[-1].replace('.', ' ').title()
+                friend_list.append({'name': name, 'url': url})
+    else:
+        # Default test friend
+        friend_list = [{'name': 'Mark Retallack', 'url': 'https://www.facebook.com/mark.retallack'}]
     
-    # For now, return empty list since we don't have following scraper yet
-    return []
+    # Scrape fresh posts
+    aggregator = FeedAggregator(session_manager.page, session_manager)
+    posts = await aggregator.get_feed(friend_list, [], limit=limit, include_own_profile=False)
+    
+    # Store in cache
+    if cache_service and posts:
+        print(f"[DEBUG] Storing {len(posts)} posts in cache")
+        for post in posts:
+            print(f"[DEBUG] Storing post: {post['id'][:50]}...")
+            cache_service.store_post(
+                post_id=post['id'],
+                author_name=post['author']['name'],
+                author_url=post['author']['profile_url'],
+                content=post['content'],
+                url=post['url'],
+                timestamp=post.get('timestamp', ''),
+                image_url=post.get('image_url'),
+                source_type='friend'
+            )
+        print(f"[DEBUG] Finished storing posts")
+    else:
+        print(f"[DEBUG] Not storing: cache_service={cache_service is not None}, posts={len(posts) if posts else 0}")
+    
+    return {
+        "count": len(posts),
+        "posts": posts,
+        "cached": False
+    }
 
-@router.post("/create", response_model=PostActionResponse)
-async def create_post(request: CreatePostRequest):
-    """Create a new post."""
-    if not posts_service:
-        raise HTTPException(status_code=503, detail="Posts service not initialized")
+@router.post("/feed/refresh")
+async def refresh_feed(
+    friends: str = Query("", description="Comma-separated friend profile URLs"),
+    limit: int = Query(20, ge=1, le=100)
+):
+    """Refresh feed cache in background - call this periodically"""
     
-    result = await posts_service.create_post(
-        content=request.content,
-        image_paths=request.image_paths,
-        privacy=request.privacy
-    )
+    if not session_manager or not session_manager.page:
+        raise HTTPException(status_code=503, detail="Browser not ready")
     
-    if not result['success']:
-        raise HTTPException(status_code=500, detail=result.get('error', 'Failed to create post'))
+    # Parse friends list
+    friend_list = []
+    if friends:
+        for url in friends.split(','):
+            url = url.strip()
+            if url:
+                name = url.split('/')[-1].replace('.', ' ').title()
+                friend_list.append({'name': name, 'url': url})
+    else:
+        friend_list = [{'name': 'Mark Retallack', 'url': 'https://www.facebook.com/mark.retallack'}]
     
-    return PostActionResponse(success=True, message="Post created")
-
-@router.delete("/{post_id}", response_model=PostActionResponse)
-async def delete_post(post_id: str):
-    """Delete a post."""
-    if not posts_service:
-        raise HTTPException(status_code=503, detail="Posts service not initialized")
+    # Scrape and cache
+    aggregator = FeedAggregator(session_manager.page, session_manager)
+    posts = await aggregator.get_feed(friend_list, [], limit=limit, include_own_profile=False)
     
-    result = await posts_service.delete_post(post_id)
+    if cache_service and posts:
+        for post in posts:
+            cache_service.store_post(
+                post_id=post['id'],
+                author_name=post['author']['name'],
+                author_url=post['author']['profile_url'],
+                content=post['content'],
+                url=post['url'],
+                timestamp=post.get('timestamp', ''),
+                image_url=post.get('image_url'),
+                source_type='friend'
+            )
     
-    if not result['success']:
-        raise HTTPException(status_code=500, detail=result.get('error', 'Failed to delete post'))
-    
-    return PostActionResponse(success=True, message="Post deleted")
-
-@router.post("/{post_id}/like", response_model=PostActionResponse)
-async def like_post(post_id: str):
-    """Like a post."""
-    if not posts_service:
-        raise HTTPException(status_code=503, detail="Posts service not initialized")
-    
-    result = await posts_service.like_post(post_id)
-    
-    if not result['success']:
-        raise HTTPException(status_code=500, detail=result.get('error', 'Failed to like post'))
-    
-    return PostActionResponse(success=True, message="Post liked")
-
-@router.post("/{post_id}/react", response_model=PostActionResponse)
-async def react_post(post_id: str, request: ReactionRequest):
-    """React to a post."""
-    if not posts_service:
-        raise HTTPException(status_code=503, detail="Posts service not initialized")
-    
-    result = await posts_service.react_post(post_id, request.reaction)
-    
-    if not result['success']:
-        raise HTTPException(status_code=500, detail=result.get('error', 'Failed to react'))
-    
-    return PostActionResponse(success=True, message=f"Reacted with {request.reaction}")
-
-@router.post("/{post_id}/comment", response_model=PostActionResponse)
-async def comment_post(post_id: str, request: CommentRequest):
-    """Comment on a post."""
-    if not posts_service:
-        raise HTTPException(status_code=503, detail="Posts service not initialized")
-    
-    result = await posts_service.comment_post(post_id, request.comment)
-    
-    if not result['success']:
-        raise HTTPException(status_code=500, detail=result.get('error', 'Failed to comment'))
-    
-    return PostActionResponse(success=True, message="Comment posted")
-
-@router.post("/{post_id}/share", response_model=PostActionResponse)
-async def share_post(post_id: str, request: ShareRequest):
-    """Share a post."""
-    if not posts_service:
-        raise HTTPException(status_code=503, detail="Posts service not initialized")
-    
-    result = await posts_service.share_post(post_id, request.message)
-    
-    if not result['success']:
-        raise HTTPException(status_code=500, detail=result.get('error', 'Failed to share'))
-    
-    return PostActionResponse(success=True, message="Post shared")
+    return {
+        "status": "refreshed",
+        "count": len(posts),
+        "cached": True
+    }

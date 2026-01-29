@@ -91,19 +91,20 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 print(f"Auto-login failed: {e}")
     
-    # Start cache scheduler
-    if settings.CACHE_ENABLED:
-        services_dict = {
-            'posts': posts_service,
-            'friends': friends_service,
-            'profile': profile_service
-        }
-        refresh_tasks = RefreshTasks(cache_service, session_manager, services_dict)
-        cache_routes.set_refresh_tasks(refresh_tasks)
-        cache_scheduler = CacheScheduler(refresh_tasks)
-        cache_scheduler.start()
+    # Disable cache scheduler to prevent page conflicts
+    # Disable cache scheduler to prevent page conflicts
+    # if settings.CACHE_ENABLED:
+    #     services_dict = {
+    #         'posts': posts_service,
+    #         'friends': friends_service,
+    #         'profile': profile_service
+    #     }
+    #     refresh_tasks = RefreshTasks(cache_service, session_manager, services_dict)
+    #     cache_routes.set_refresh_tasks(refresh_tasks)
+    #     cache_scheduler = CacheScheduler(refresh_tasks)
+    #     cache_scheduler.start()
     
-    # Start session keeper
+    # Start session keeper (without navigation)
     session_keeper = SessionKeeper(session_manager, interval_minutes=3)
     session_keeper.start()
     
@@ -112,8 +113,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     if session_keeper:
         session_keeper.stop()
-    if cache_scheduler:
-        cache_scheduler.stop()
+    # if cache_scheduler:
+    #     cache_scheduler.stop()
     await session_manager.stop()
 
 app = FastAPI(
@@ -135,6 +136,11 @@ app.include_router(auth.router)
 app.include_router(graph_api.router, prefix="/graph", tags=["Graph API"])
 app.include_router(debug.router)
 app.include_router(posts.router)
+
+# Direct feed endpoint
+from src.api.routes import direct_feed
+app.include_router(direct_feed.router, prefix="/posts", tags=["Posts"])
+
 app.include_router(profile.router)
 app.include_router(friends.router)
 app.include_router(groups.router)

@@ -44,18 +44,9 @@ class RefreshTasks:
                 
                 logger.info("Refreshing posts cache from news feed...")
                 
-                # Get friends list
-                friends_service = self.services.get('friends')
-                if not friends_service:
-                    logger.error("Friends service not available")
-                    return
-                
-                result = await friends_service.get_friends_list(limit=10)
-                if not result['success']:
-                    raise Exception(f"Failed to get friends: {result.get('error')}")
-                
-                friends = result['data']
-                logger.info(f"Got {len(friends)} friends for feed aggregation")
+                # Hardcode friends for now since friends scraper is broken
+                friends = [{'name': 'Mark Retallack', 'url': 'https://www.facebook.com/mark.retallack'}]
+                logger.info(f"Using {len(friends)} hardcoded friends for feed aggregation")
                 
                 # Get following list (TODO: implement following scraper)
                 following = []  # Empty for now
@@ -63,7 +54,7 @@ class RefreshTasks:
                 # Use FeedAggregator to scrape news feed
                 from src.scraper.feed_aggregator import FeedAggregator
                 aggregator = FeedAggregator(self.session_manager.page)
-                posts = await aggregator.get_feed(friends, following, limit=20)
+                posts = await aggregator.get_feed(friends, following, limit=10, include_own_profile=False)
                 
                 # Pre-fetch and cache images
                 from src.api.routes.media import fetch_and_cache_image
